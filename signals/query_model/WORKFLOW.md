@@ -254,3 +254,292 @@ Suggested CLI (when coded):
 5. `build.py` + `run.sh query-model`.  
 6. S0 smoke → S1–S6 on fit MC → Hotpot / ablation as needed.  
 7. **Then** design routing (separate workflow / docs).
+
+
+
+
+
+
+
+Model-dependent signals (query–model interaction)
+
+What the professor requires
+
+From professor.md + research/introduction.tex:
+
+
+
+
+
+Model-independent (done): \phi(q), C(q) — query alone.
+
+
+
+Model-dependent (this stage): for each pair (q, M):
+
+
+
+
+
+Entropy H(q \mid M) — how uncertain M is on q.
+
+
+
+Paraphrase uncertainty U(q \mid M) — whether M’s answer stays stable when the same ask is rephrased (UKG vs robust student analogy).
+
+Routing uses these as unsupervised features (rules or later \lambda), not preference-trained q \to model maps. Agents stay out of scope.
+
+Honest framing (vs RouteLLM): these need a lightweight probe of M (logprobs and/or short generations). That is still pre-commitment to a full cascade/retry loop, but not “query-text only.” Name this clearly in WORKFLOW / method notes.
+
+flowchart LR
+  q[Query q] --> C[C_query done]
+  q --> Probe[Probe each M in pool]
+  Probe --> H["H(q|M)"]
+  Probe --> U["U(q|M)"]
+  C --> Score["score(q,M)"]
+  H --> Score
+  U --> Score
+  Score --> Route[Pick weak or strong]
+
+Signal definitions (concrete, corpus-aware)
+
+Corpus = ARC/MMLU (MC) + Hotpot (free-form). One contract, two compute paths:
+
+1. Entropy H(q \mid M)
+
+
+
+
+
+
+
+Task
+
+
+
+Probe
+
+
+
+Formula
+
+
+
+
+
+MC (ARC/MMLU)
+
+
+
+Teacher-forced logprobs of option letters A/B/C/D (and E if present) given the prompt
+
+
+
+Softmax over option logprobs → Shannon entropy H = -\sum_i p_i \log p_i; also store p_{\max}, predicted letter
+
+
+
+
+
+Free-form (Hotpot)
+
+
+
+n short samples (temp > 0)
+
+
+
+Semantic / answer entropy: normalize answers (lower/strip), cluster exact-match groups (v1; SE embedding clusters can come later), H = -\sum_c (
+
+High H ⇒ M is unsure on q ⇒ prefer escalate / other model under rules.
+
+2. Paraphrase uncertainty U(q \mid M)
+
+
+
+
+
+Build k paraphrases of the question stem with a frozen paraphraser (not the candidate under test): default google/flan-t5-base rewrite prompt, plus the original (k=3 total including original in v1).
+
+
+
+Run the same answer probe as above on each surface form.
+
+
+
+MC: U = 1 - fraction of paraphrases whose argmax letter matches the mode letter (or mean pairwise disagreement).
+
+
+
+Free-form: U = 1 - fraction of paraphrases whose normalized answer matches the mode answer.
+
+Low U ⇒ robust under rephrase ⇒ favor that M for q.
+
+3. What we do not put in v1
+
+
+
+
+
+Full Zhang-style semantic-entropy embedding clusters (add later if exact-match is too coarse on Hotpot).
+
+
+
+Preference / correctness labels as training targets (oracle accuracy is for eval only, same firewall as complexity).
+
+
+
+Agent signals.
+
+Model pool (already frozen)
+
+From datasets/config.yaml:
+
+
+
+
+
+Primary: llama-3.1-8b-instruct ↔ llama-3.1-70b-instruct
+
+
+
+Ablation: qwen2.5-7b-instruct ↔ llama-3.1-70b-instruct
+
+Compute (H, U) for both models on each query for the active experiment; rule example: prefer the model with lower U (or lower H) among weak/strong, or combine with C(q) later.
+
+Inference default: HuggingFace transformers + 4-bit load for 70B (bitsandbytes), Instruct chat templates, fixed seed/decoding in config. Smoke path: --limit + optional --mock backend (deterministic fake logprobs) so CI/dev does not need GPUs.
+
+Layout (mirror signals/query, minimal files)
+
+signals/query_model/
+  WORKFLOW.md      # concepts, firewall, formulas, experiments
+  config.yaml      # models, n_samples, k_paraphrases, decoding, paths
+  features.py      # entropy + disagreement math (no HF)
+  backend.py       # ModelBackend: mock | hf (logprobs MC + generate)
+  paraphrase.py    # frozen T5 paraphrases of stem
+  build.py         # CLI: corpus → per (query_id, model_id) jsonl
+  requirements.txt
+
+Wire: ./run.sh query-model [--limit N] [--experiment primary|ablation] [--mock]
+
+Output record (one line per query–model)
+
+{
+  "query_id": "...", "model_id": "...", "role": "fit|calib|eval",
+  "source": "arc_challenge|...", "experiment": "same_family_scaleup",
+  "entropy": {"H": 0.0, "p_max": 0.0, "pred": "A"},
+  "paraphrase": {"U": 0.0, "n": 3, "agreement": 0.67},
+  "probe": {"kind": "mc_logprob|sample_entropy"}
+}
+
+Artifacts: signals/query_model/processed/{fit,calib,eval}.jsonl, artifacts/manifest.json. Gitignore processed (same pattern as query).
+
+Firewall (same as complexity)
+
+
+
+
+
+
+
+Use
+
+
+
+Allowed
+
+
+
+
+
+Build H,U on fit/calib/eval
+
+
+
+yes (features of q,M)
+
+
+
+
+
+Tune rule thresholds / \lambda
+
+
+
+calib only
+
+
+
+
+
+Paper metrics (PGR, CPT, AUROC)
+
+
+
+eval only
+
+
+
+
+
+Fit paraphraser or entropy on eval labels
+
+
+
+never
+
+Paraphraser and decoding hyperparams are frozen in config; not learned from correctness.
+
+Experiments this unlocks (paper tables later)
+
+
+
+
+
+E_H: does high H(q \mid M_{\mathrm{weak}}) predict needs_strong (oracle)?
+
+
+
+E_U: does high U(q \mid M_{\mathrm{weak}}) predict needs_strong?
+
+
+
+E_rule: prefer \arg\min_M U(q|M) (or H) vs always-weak / always-strong / C(q)-only.
+
+
+
+Primary vs ablation = one extra row.
+
+Oracle answers (correct/incorrect per model) are a separate eval artifact when you run full generations for scoring—not required to define H,U.
+
+Implementation order
+
+
+
+
+
+Write WORKFLOW.md + config.yaml (formulas + pool pointers).
+
+
+
+Implement features.py (pure math) + unit checks on toy distributions.
+
+
+
+Implement backend.py (mock first) + paraphrase.py.
+
+
+
+Implement build.py CLI; smoke with --mock --limit 8.
+
+
+
+Document real run: primary experiment on GPU when weights available.
+
+
+
+Short research/method_model_dependent.md (+ .tex stub) aligned with WORKFLOW.
+
+Dependencies
+
+Add to signals/query_model/requirements.txt: transformers, accelerate, bitsandbytes, torch (and reuse pyyaml / sentence stack only if we later upgrade Hotpot clustering).
