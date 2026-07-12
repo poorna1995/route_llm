@@ -1,0 +1,68 @@
+# Corpus design for unsupervised LLM routing research
+#
+# Core problem: route query → LLM using unsupervised signals
+#   (complexity, entropy, paraphrase uncertainty) + optional λ weights.
+# Agents deferred. Eval = cost/quality (PGR, CPT). Online = unseen queries.
+#
+# Research scenarios this split must support:
+#   S1 Signal validity per task type (science MC / multi-hop QA / knowledge MC)
+#   S2 Rule-based routing without preference labels
+#   S3 Learn λ on fit; never on eval
+#   S4 Multi-task threshold calib (when to escalate to 70B)
+#   S5 Free-form (Hotpot) vs MC (ARC/MMLU) signal behavior
+#   S6 Per-dataset + pooled reporting
+#   S7 Production = queries outside frozen split_ids
+#
+# Balance: fit/eval roughly matched across sources; calib from ≥2 sources.
+# MMLU val is naturally small (~278) — take all; do not drown under Hotpot.
+
+version: corpus_v1
+seed: 42
+output_dir: datasets/processed/corpus_v1
+
+model_pool:
+  - id: qwen2.5-7b-instruct
+    role: weak
+  - id: gemma-2-9b-it
+    role: weak
+  - id: llama-3.1-70b-instruct
+    role: strong
+
+datasets:
+  # Science MC — classic train/val/test → fit/calib/eval
+  arc_challenge:
+    enabled: true
+    roles:
+      fit:   { split: train, max_examples: 1000 }       # of 1119
+      calib: { split: validation, max_examples: null }  # 299 — thresholds
+      eval:  { split: test, max_examples: 1000 }        # of 1172
+
+  # Multi-hop QA — no gold test; val=eval. Train partitioned → fit + calib (disjoint).
+  hotpotqa:
+    enabled: true
+    hf_config: distractor
+    context_policy: question_only
+    roles:
+      fit:   { split: train, max_examples: 1000 }       # free-form signals
+      calib: { split: train, max_examples: 200 }        # disjoint from fit (builder partitions)
+      eval:  { split: validation, max_examples: 1000 }  # of 7405
+
+  # Knowledge MC — test=eval; all subject val=fit (only gold leftover)
+  mmlu:
+    enabled: true
+    subjects:
+      - college_physics
+      - college_mathematics
+      - high_school_computer_science
+      - electrical_engineering
+      - high_school_microeconomics
+      - sociology
+      - high_school_government_and_politics
+      - professional_psychology
+      - philosophy
+      - world_religions
+      - high_school_world_history
+      - formal_logic
+    roles:
+      fit:  { split: validation, per_subject: null }   # ~278 all
+      eval: { split: test, per_subject: 50 }           # 600

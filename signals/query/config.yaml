@@ -1,0 +1,63 @@
+# Model-independent query complexity φ(q)
+# Geometry / z-score fit on role=fit only. Never use eval for transforms.
+
+corpus_dir: datasets/processed/corpus_v1
+output_dir: signals/query/processed
+artifact_dir: signals/query/artifacts
+embedding_dir: signals/query/embeddings
+
+embedder_id: sentence-transformers/all-MiniLM-L6-v2
+pca_components: 3
+knn_k: 10
+mattr_window: 50
+zlib_level: 6
+
+# How C_* combine into C_query (tune on calib later; defaults = equal weight)
+complexity_weights:
+  C_length: 0.25
+  C_density: 0.25
+  C_atypical: 0.25
+  C_linguistic: 0.25
+
+linguistic:
+  reasoning:
+    - explain
+    - why
+    - how
+    - compare
+    - contrast
+    - prove
+    - analyze
+    - analyse
+    - evaluate
+    - reason
+    - infer
+    - deduce
+    - hypothesize
+    - justify
+  multihop:
+    - both
+    - also
+    - as well as
+    - in addition
+    - which of the following
+    - according to
+    - based on
+    - respectively
+    - former
+    - latter
+  domains:
+    science: [biology, chemistry, physics, atom, cell, organism, energy, force, planet]
+    math: [calculate, equation, integral, probability, algebra, geometry, number, ratio]
+    history: [war, century, empire, president, civilization, ancient, dynasty]
+    social: [economy, government, society, politics, law, rights, culture]
+    cs: [algorithm, computer, program, software, network, data, code]
+    medicine: [disease, patient, clinical, diagnosis, therapy, drug]
+
+requirement_markers:
+  - " and then "
+  - " first "
+  - " second "
+  - " finally "
+  - "also"
+  - "as well"
