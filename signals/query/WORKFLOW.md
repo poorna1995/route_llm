@@ -32,7 +32,7 @@ We do **not** assume complexity = length. We approximate complexity with a vecto
 |-----------|-----------|---------------|---------|
 | **D1 Surface load** | Longer / denser text → more to process | `structural` | token lengths, MATTR, compression_ratio |
 | **D2 Semantic atypicality** | Far from fit distribution → harder / OOD-ish | `embedding_geometry` | centroid distance, low kNN similarity, high LOF; PCA coords |
-| **D3 Cognitive / linguistic demand** | Reasoning / multi-hop / multi-domain wording | `linguistic_cues` | reasoning lexicon, multi-hop cues, domain breadth, requirement count |
+| **D3 Cognitive / linguistic demand** | Reasoning / multi-hop / multi-domain wording | `linguistic_cues` | Bloom ordinal depth, multi-hop cues, domain breadth, requirement count |
 | **D4 Task form** | MC vs free-form changes what “hard” looks like | `task_form` | `is_mc`, `n_choices`, `task_type` / `source` |
 
 **Required v1:** D1 + D2 + D3 + D4.
@@ -142,7 +142,7 @@ datasets/processed/corpus_v1/queries_{fit,calib,eval}.jsonl
 | Key | Capture |
 |-----|---------|
 | `n_requirements` | counts of distinct ask markers (`;`, numbered steps, “and then”, multi-sentence questions) |
-| `reasoning_depth_score` | hits on explain/why/how/compare/prove/analyze/… |
+| `reasoning_depth_score` | max revised-Bloom level from process verbs/phrases on the stem (`0` or `2..6`; Remember/interrogatives omitted) |
 | `multihop_score` | bridge cues (“both”, “as well as”, “which … also”, Hotpot-style) |
 | `domain_breadth` | # distinct domain buckets with ≥1 keyword hit |
 | `n_question_marks` / `n_sentences` | structural ask load |

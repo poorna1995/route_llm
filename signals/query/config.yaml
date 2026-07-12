@@ -9,7 +9,7 @@ embedding_dir: signals/query/embeddings
 embedder_id: sentence-transformers/all-MiniLM-L6-v2
 pca_components: 3
 knn_k: 10
-mattr_window: 50
+mattr_window: 25
 zlib_level: 6
 
 # How C_* combine into C_query (tune on calib later; defaults = equal weight)
@@ -20,21 +20,66 @@ complexity_weights:
   C_linguistic: 0.25
 
 linguistic:
-  reasoning:
-    - explain
-    - why
-    - how
-    - compare
-    - contrast
-    - prove
-    - analyze
-    - analyse
-    - evaluate
-    - reason
-    - infer
-    - deduce
-    - hypothesize
-    - justify
+  # Revised Bloom process verbs → ordinal reasoning_depth_score ∈ {0,2,3,4,5,6}.
+  # Deliberately NOT using Remember interrogatives (what/who/which) — they fire on
+  # almost every QA item and collapse the signal. Bare "how" is also excluded
+  # (how long / how many ≠ cognitive Apply); use apply_phrases instead.
+  # Create uses phrases so topic nouns (invention, create) do not inflate depth.
+  bloom:
+    understand:  # level 2
+      - explain
+      - describe
+      - summarize
+      - summarise
+      - interpret
+      - clarify
+      - paraphrase
+      - discuss
+    apply:  # level 3
+      - calculate
+      - compute
+      - solve
+      - apply
+      - demonstrate
+      - determine
+    analyze:  # level 4
+      - compare
+      - contrast
+      - distinguish
+      - differentiate
+      - analyze
+      - analyse
+      - examine
+      - infer
+      - deduce
+      - categorize
+      - classify
+      - prove
+      - reason
+      - why
+    evaluate:  # level 5 (avoid judge/defend — common nouns in ARC/MMLU/Hotpot)
+      - evaluate
+      - assess
+      - critique
+      - justify
+      - argue
+    create:  # level 6 — rare single-token verbs only
+      - hypothesize
+      - hypothesise
+      - formulate
+      - propose
+    apply_phrases:
+      - "how would"
+      - "how could"
+      - "how can"
+      - "how might"
+      - "how should"
+    create_phrases:
+      - "design a"
+      - "create a"
+      - "propose a"
+      - "invent a"
+      - "develop a new"
   multihop:
     - both
     - also

@@ -20,13 +20,18 @@ version: corpus_v1
 seed: 42
 output_dir: datasets/processed/corpus_v1
 
+# Candidate LLM pool (agents deferred).
+# Main tables = same-family scale-up. Ablation = one cross-family row.
+# Stage-1 routing is binary: weak ↔ strong (escalate when C(q) ≥ τ).
 model_pool:
-  - id: qwen2.5-7b-instruct
-    role: weak
-  - id: gemma-2-9b-it
-    role: weak
-  - id: llama-3.1-70b-instruct
-    role: strong
+  primary:
+    name: same_family_scaleup
+    weak: llama-3.1-8b-instruct
+    strong: llama-3.1-70b-instruct
+  ablation:
+    name: cross_family
+    weak: qwen2.5-7b-instruct
+    strong: llama-3.1-70b-instruct  # same strong; swap weak only
 
 datasets:
   # Science MC — classic train/val/test → fit/calib/eval

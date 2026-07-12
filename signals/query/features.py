@@ -77,16 +77,50 @@ def structural(prompt: str, *, mattr_window: int, zlib_level: int) -> dict[str, 
     }
 
 
+_BLOOM_LEVEL = {
+    "understand": 2,
+    "apply": 3,
+    "analyze": 4,
+    "evaluate": 5,
+    "create": 6,
+}
+
+
+def bloom_depth(question: str, bloom_cfg: dict[str, Any]) -> int:
+    """Max revised-Bloom level from process cues on the question stem.
+
+    Returns 0 if no cue matches. Level 1 (Remember) is intentionally unused:
+    bare interrogatives are near-universal in QA and are not demand signals.
+    """
+    if not bloom_cfg:
+        return 0
+    text = question.lower()
+    toks = set(words(question))
+    best = 0
+    for phrase in bloom_cfg.get("apply_phrases") or []:
+        if phrase.lower() in text:
+            best = max(best, 3)
+    for phrase in bloom_cfg.get("create_phrases") or []:
+        if phrase.lower() in text:
+            best = max(best, 6)
+    for name, level in _BLOOM_LEVEL.items():
+        for w in bloom_cfg.get(name) or []:
+            if w.lower() in toks:
+                best = max(best, level)
+                break
+    return best
+
+
 def linguistic_cues(prompt: str, cfg: dict[str, Any]) -> dict[str, float]:
     question, _ = parse_prompt(prompt)
     text = prompt.lower()
     toks = set(words(prompt))
+    q_toks = set(words(question))
     ling = cfg.get("linguistic") or {}
 
-    def hit_count(lexicon: list[str]) -> int:
-        return sum(1 for w in lexicon if w.lower() in toks or w.lower() in text)
+    def hit_count(lexicon: list[str], token_set: set[str], haystack: str) -> int:
+        return sum(1 for w in lexicon if w.lower() in token_set or w.lower() in haystack)
 
-    reasoning = ling.get("reasoning") or []
     multihop = ling.get("multihop") or []
     domains = ling.get("domains") or {}
 
@@ -101,11 +135,13 @@ def linguistic_cues(prompt: str, cfg: dict[str, Any]) -> dict[str, float]:
     n_req += len(re.findall(r"(?:^|\s)(?:\d+[\.)]|[\-\*])\s+\w", prompt))
     # count on stem only so MC "A. / B." markers do not inflate
     n_sentences = max(1, len([s for s in _SENTENCE.split(question) if s.strip()]))
+    depth = bloom_depth(question, ling.get("bloom") or {})
 
     return {
         "n_requirements": float(n_req),
-        "reasoning_depth_score": float(hit_count(reasoning)),
-        "multihop_score": float(hit_count(multihop)),
+        # ordinal Bloom depth (0 or 2..6); name kept for C_linguistic wiring
+        "reasoning_depth_score": float(depth),
+        "multihop_score": float(hit_count(multihop, q_toks, question.lower())),
         "domain_breadth": float(domain_hits),
         "n_question_marks": float(prompt.count("?")),
         "n_sentences": float(n_sentences),
