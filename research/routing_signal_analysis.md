@@ -1,16 +1,16 @@
 # Which Signals Inform Unsupervised LLM Routing?
 
-**Status:** Empirical signal study on the fit split (joined weak / strong / complexity streams)  
+**Status:** Fit signal study **+** calib \(\tau^\star\) / eval routing (rule-based)  
 **Pool:** `local_strong` — weak = Llama-3.1-8B-Instruct; strong = Qwen2.5-32B-Instruct  
-**Data:** \(n=2278\) (ARC-Challenge 1000 · HotpotQA 1000 · MMLU 278)  
-**Artifacts:** `fit_weak.jsonl`, `fit_strong.jsonl`, `signals/query/processed/fit.jsonl`  
-**Companion figure:** `research/figures/fig_signal_correlation.png`
+**Data:** fit \(n=2278\) · calib \(n=499\) · eval \(n=2597\) (ARC · HotpotQA · MMLU)  
+**Artifacts:** `{fit,calib,eval}_{weak,strong}.jsonl`, `signals/query/processed/{role}.jsonl`, `router/artifacts/rule_based/`  
+**Companion figures:** `research/figures/fig_signal_correlation.png`, `research/figures/fig_routing_curve.png`
 
 ---
 
 ## Abstract
 
-We study which unsupervised features carry information for binary weak–strong LLM routing. Signals fall into two families: **model-independent** query complexity \(C(q)=g(\phi(q))\), and **model-dependent** answer uncertainty \(\psi(q,M_{\mathrm{weak}})\) obtained from a weak-model probe. On the fit corpus, weak-probe entropy \(H\) and confidence \(p_{\max}\) (equivalently margin) align strongly with both weak-model error and the routing label \(\texttt{needs\_strong}\) (weak wrong \(\wedge\) strong right), with AUROC in the range \(0.72\)–\(0.86\) depending on task. In contrast, individual complexity components \(C_{\mathrm{length}}\), \(C_{\mathrm{density}}\), \(C_{\mathrm{atypical}}\), \(C_{\mathrm{linguistic}}\), and the composite \(C_{\mathrm{query}}\) remain near chance (\(\mathrm{AUROC}\approx 0.50\)–\(0.58\)). Pearson correlations between the two families are near zero (\(|r|\lesssim 0.14\)), while within the weak confidence family signals are nearly collinear (\(|r|\approx 0.96\)–\(0.99\)). We conclude that, under the present estimators and corpus, **routing decisions should be driven by weak-model \(H\) / \(p_{\max}\)**; model-independent \(C_*\) are retained as a cheap but currently weak complementary inventory, not as primary decision features.
+We study which unsupervised features carry information for binary weak–strong LLM routing. Signals fall into two families: **model-independent** query complexity \(C(q)=g(\phi(q))\), and **model-dependent** answer uncertainty \(\psi(q,M_{\mathrm{weak}})\) obtained from a weak-model probe. On the fit corpus, weak-probe entropy \(H\) and confidence \(p_{\max}\) (equivalently margin) align strongly with both weak-model error and the routing label \(\texttt{needs\_strong}\) (weak wrong \(\wedge\) strong right), with AUROC in the range \(0.72\)–\(0.86\) depending on task. In contrast, individual complexity components \(C_{\mathrm{length}}\), \(C_{\mathrm{density}}\), \(C_{\mathrm{atypical}}\), \(C_{\mathrm{linguistic}}\), and the composite \(C_{\mathrm{query}}\) remain near chance (\(\mathrm{AUROC}\approx 0.50\)–\(0.58\)). Pearson correlations between the two families are near zero (\(|r|\lesssim 0.14\)), while within the weak confidence family signals are nearly collinear (\(|r|\approx 0.96\)–\(0.99\)). We conclude that, under the present estimators and corpus, **routing decisions should be driven by weak-model \(H\) / \(p_{\max}\)**; model-independent \(C_*\) are retained as a cheap but currently weak complementary inventory, not as primary decision features. A subsequent calib→eval rule-based study (§12) confirms this: with \(\tau^\star\) chosen by CPT80 on calib, \(S_H\) recovers ~85% of the weak→strong gap on eval at ~45% strong-call rate, matching richer sets at lower cost.
 
 ---
 
@@ -229,8 +229,8 @@ Gold outcomes (\(\texttt{weak\_wrong}\), \(\texttt{needs\_strong}\)), preference
 
 ## 9. Implications for evaluation and the paper narrative
 
-1. **Signal validation before policy.** Report AUROC of weak \(H\)/\(p_{\max}\) vs \(\texttt{needs\_strong}\) per source (Figure candidate: ROC or bar chart), then routing curves / CPT / PGR on calib–eval.
-2. **Do not claim \(C(q)\) as a strong escalate feature yet.** Position \(C_*\) as a model-independent baseline inventory with limited predictive power on this corpus; the correlation figure supports “orthogonal but weak.”
+1. **Signal validation before policy.** Fit AUROC of weak \(H\)/\(p_{\max}\) vs \(\texttt{needs\_strong}\) (earlier sections); then routing curves / CPT / PGR on calib–eval (§12).
+2. **Do not claim \(C(q)\) as a strong escalate feature yet.** Position \(C_*\) as a model-independent baseline inventory with limited predictive power on this corpus; the correlation figure supports “orthogonal but weak.” Adding \(C_*\) into \(S_{\mathrm{all}}\) increases \(\alpha\) without a meaningful accuracy gain on eval.
 3. **Task stratification.** Always separate MC from Hotpot when discussing both accuracy and signal quality.
 4. **Probe cost honesty.** MD routing pays one weak probe (MC) or \(n\) samples (Hotpot); this is architectural cost, distinct from query-only supervised routers.
 
@@ -238,14 +238,93 @@ Gold outcomes (\(\texttt{weak\_wrong}\), \(\texttt{needs\_strong}\)), preference
 
 ## 10. Limitations
 
-- Results are on **fit** only; calib/eval generalization of thresholds remains.
 - Hotpot quality uses **exact match**, which understates semantic correctness and inflates both-wrong.
 - Strong model is Qwen2.5-32B (local pool), not Llama-3.1-70B (paper primary pair).
-- Paraphrase uncertainty \(U\) and measured wall-clock latency are not included.
+- Paraphrase uncertainty \(U\) was not enabled (`--no-paraphrase`).
+- \(\tau^\star\) selection uses pooled CPT80; per-source thresholds are not tuned separately (Hotpot still escalates more under the pooled rule).
 - Complexity weights are default equal weights; retuning may improve \(C_*\) slightly but is unlikely to close the gap to \(H\) given current AUROCs.
 
 ---
 
 ## 11. Conclusion
 
-Among the unsupervised signals defined for weak–strong routing, **information for the routing decision resides primarily in the weak model’s answer uncertainty**—entropy \(H\) and the confidence summaries \(p_{\max}\) and margin from the same probe. Model-independent complexity features \(C_*\) are nearly uncorrelated with these probes and, under current estimators, do not reliably rank queries that need escalation. The empirically supported decision pathway is therefore: probe \(M_{\mathrm{weak}}\) \(\rightarrow\) read \(H\) or \(p_{\max}\) \(\rightarrow\) threshold \(\rightarrow\) optionally call \(M_{\mathrm{strong}}\), with \(C(q)\) retained as an optional pre-inference baseline rather than the primary routing signal.
+Among the unsupervised signals defined for weak–strong routing, **information for the routing decision resides primarily in the weak model’s answer uncertainty**—entropy \(H\) and the confidence summaries \(p_{\max}\) and margin from the same probe. Model-independent complexity features \(C_*\) are nearly uncorrelated with these probes and, under current estimators, do not reliably rank queries that need escalation. On held-out **eval**, a calib-frozen threshold on \(H\) alone recovers about **85%** of the weak→strong gap while calling strong on about **45%** of queries—matching richer feature sets at lower cost. The empirically supported decision pathway is therefore: probe \(M_{\mathrm{weak}}\) \(\rightarrow\) read \(H\) or \(p_{\max}\) \(\rightarrow\) threshold on **calib** \(\rightarrow\) optionally call \(M_{\mathrm{strong}}\) on **eval**, with \(C(q)\) retained as an optional pre-inference baseline rather than the primary routing signal.
+
+---
+
+## 12. Routing policy: calib \(\tau^\star\) and eval (rule-based)
+
+This section closes the loop after the fit-only signal study: choose \(\tau\) on **calib**, freeze it, report on **eval**. No preference labels; equal-weight oriented / z-scored feature sets; selection rule **`cpt80`** (minimal \(\alpha\) with PGR \(\ge 0.80\) on calib).
+
+**Commands / artifacts**
+
+```bash
+./run.sh route rank --role fit
+./run.sh route sweep --role calib   # → tau_star.json, zscore_fit.json, curves_calib.json
+./run.sh route eval                 # → eval_eval.json
+./run.sh route curves --role eval   # → fig_routing_curve.png (plot-only eval sweep)
+```
+
+Fit rank order (pooled AUROC → `needs_strong`):  
+`margin`, `p_max`, `H`, `top2_mass`, `C_atypical`, …  
+So \(S_{\mathrm{top2}}=\{\mathrm{margin},p_{\max}\}\), \(S_{\mathrm{top4}}\) adds \(H\) and `top2_mass`, \(S_{\mathrm{top5}}\) adds `C_atypical`.
+
+### 12.1 Baselines
+
+| Split | \(n\) | Always weak | Always strong | Gap |
+|-------|------:|------------:|--------------:|----:|
+| calib | 499 | 0.717 | 0.844 | +0.126 |
+| eval | 2597 | 0.586 | 0.753 | +0.166 |
+
+Eval is harder than calib (lower absolute accuracies, larger gap); \(\alpha\) at frozen \(\tau^\star\) therefore tends to rise on eval even when PGR stays high.
+
+### 12.2 Calib: chosen \(\tau^\star\) (CPT80)
+
+| Set | Features (summary) | \(\alpha\) | Acc | PGR | CPT80 \(\alpha\) |
+|-----|--------------------|----------:|----:|----:|-----------------:|
+| \(S_H\) | \(H\) | 0.341 | 0.820 | 0.810 | 0.341 |
+| \(S_p\) | \(p_{\max}\) | 0.341 | 0.820 | 0.810 | 0.341 |
+| \(S_{\mathrm{md}}\) | \(H,p_{\max},\mathrm{margin}\) | 0.341 | 0.820 | 0.810 | 0.341 |
+| \(S_{\mathrm{top2}}\) | margin, \(p_{\max}\) | 0.341 | 0.820 | 0.810 | 0.341 |
+| \(S_{\mathrm{top4}}\) | + \(H\), top2_mass | 0.341 | 0.820 | 0.810 | 0.341 |
+| \(S_{\mathrm{top5}}\) | + \(C_{\mathrm{atypical}}\) | 0.381 | 0.820 | 0.810 | 0.381 |
+| \(S_{\mathrm{all}}\) | all \(C_*\) + \(\psi\) | 0.519 | 0.820 | 0.810 | 0.519 |
+
+On calib, single-signal \(S_H\) / \(S_p\) already hit the CPT80 target at \(\alpha\approx 0.34\). Adding all complexity features inflates the call rate without improving calib PGR under this selector.
+
+### 12.3 Eval: frozen \(\tau^\star\) (no retune)
+
+| Set | \(\alpha\) | Acc | PGR |
+|-----|----------:|----:|----:|
+| \(S_H\) | **0.452** | **0.728** | **0.850** |
+| \(S_p\) | 0.449 | 0.727 | 0.845 |
+| \(S_{\mathrm{md}}\) | 0.449 | 0.727 | 0.847 |
+| \(S_{\mathrm{top2}}\) | 0.448 | 0.727 | 0.845 |
+| \(S_{\mathrm{top4}}\) | 0.451 | 0.727 | 0.847 |
+| \(S_{\mathrm{top5}}\) | 0.512 | 0.727 | 0.847 |
+| \(S_{\mathrm{all}}\) | 0.625 | 0.730 | 0.863 |
+
+**Reading:** router accuracy ~**73%** sits between always-weak (**58.6%**) and always-strong (**75.3%**). Simple sets recover **~85%** of the gap at **~45%** strong calls. \(S_{\mathrm{all}}\) gains only ~1–2 pp of PGR while calling strong on **62.5%** of queries — worse cost efficiency.
+
+### 12.4 Eval slices for \(S_H\)
+
+| Slice | \(n\) | \(\alpha\) | Acc | PGR |
+|-------|------:|----------:|----:|----:|
+| pooled | 2597 | 0.452 | 0.728 | 0.850 |
+| MC pooled | 1597 | 0.413 | 0.877 | 0.865 |
+| ARC-Challenge | 1000 | 0.326 | 0.927 | 0.859 |
+| MMLU | 597 | 0.559 | 0.794 | 0.875 |
+| HotpotQA | 1000 | 0.513 | 0.489 | 0.827 |
+
+Hotpot drives higher \(\alpha\) and lower absolute accuracy (EM); MC slices look stronger. PGR remains high on every slice, so the rule generalizes in gap-recovery terms even where EM is harsh.
+
+### 12.5 Routing curves
+
+Figure `research/figures/fig_routing_curve.png` shows **plot-only** eval sweeps of accuracy and PGR vs \(\alpha\). Stars mark the **calib \(\tau^\star\)** operating point on each curve (not re-chosen on eval). \(S_H\) / \(S_{\mathrm{top2}}\) / \(S_{\mathrm{top4}}\) dominate the upper-left frontier; \(S_{\mathrm{all}}\) lies below/right (more calls for similar quality).
+
+### 12.6 Takeaway for the paper
+
+1. Fit ranking predicted the right primary family (\(\psi\): \(H\) / \(p_{\max}\) / margin).  
+2. Calib CPT80 yields a usable frozen threshold.  
+3. Eval confirms **~85% PGR at ~45% \(\alpha\)** for \(S_H\) — competitive with top-\(k\) sets, cheaper than \(S_{\mathrm{all}}\).  
+4. Prefer reporting \(S_H\) (or \(S_p\)) as the main unsupervised rule; treat \(S_{\mathrm{all}}\) as a negative control for “dump all features.”
