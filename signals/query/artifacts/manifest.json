@@ -1,0 +1,14 @@
+{
+  "config_sha16": "3c7e38fb7d84c608",
+  "corpus_dir": "/home/grbdcn/poorna/routing/datasets/processed/corpus_v1",
+  "counts": {
+    "calib": 499,
+    "eval": 2597,
+    "fit": 2278
+  },
+  "created_utc": "2026-07-12T11:49:25.868872+00:00",
+  "embedder_id": "sentence-transformers/all-MiniLM-L6-v2",
+  "eval_overlap_geometry": 0,
+  "geometry_n_fit": 2278,
+  "limit": null
+}

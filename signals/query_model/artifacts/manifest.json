@@ -1,0 +1,26 @@
+{
+  "backend": "hf",
+  "config_sha16": "46682f37d050fd17",
+  "counts": {
+    "eval_strong": 2597
+  },
+  "created_utc": "2026-07-18T12:23:41.403820+00:00",
+  "experiment": "local_strong",
+  "experiment_name": "local_qwen32_strong",
+  "files": [
+    "signals/query_model/processed/eval_strong.jsonl"
+  ],
+  "layout": "{role}_{model_role}.jsonl",
+  "limit": null,
+  "models": [
+    {
+      "hf_id": "Qwen/Qwen2.5-32B-Instruct",
+      "role": "strong"
+    }
+  ],
+  "paraphrase_k": 3,
+  "replace_all": false,
+  "resume": true,
+  "save_every": 10,
+  "sources_filter": null
+}

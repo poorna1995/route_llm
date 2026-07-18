@@ -4,6 +4,7 @@
   ./run.sh route rank
   ./run.sh route sweep --role calib
   ./run.sh route eval
+  ./run.sh route curves --role eval
 """
 
 from __future__ import annotations
@@ -29,6 +30,18 @@ def main() -> int:
     p_eval = sub.add_parser("eval", help="Apply frozen τ* on eval")
     p_eval.add_argument("--role", default="eval")
 
+    p_curves = sub.add_parser(
+        "curves",
+        help="Plot-only eval sweep; mark calib τ* → research/figures/fig_routing_curve.png",
+    )
+    p_curves.add_argument("--role", default="eval")
+    p_curves.add_argument("--out", type=Path, default=None)
+    p_curves.add_argument(
+        "--sets",
+        default="S_H,S_top2,S_top4,S_top5,S_all",
+        help="comma-separated feature sets",
+    )
+
     p_join = sub.add_parser("join-check", help="Sanity-check join counts")
     p_join.add_argument("--role", default="fit")
 
@@ -52,6 +65,13 @@ def main() -> int:
         from router.rule_based.evaluate import run_eval
 
         run_eval(role=args.role)
+        return 0
+
+    if args.cmd == "curves":
+        from router.rule_based.curves import run_curves
+
+        sets = tuple(s.strip() for s in args.sets.split(",") if s.strip())
+        run_curves(role=args.role, out_png=args.out, sets=sets)
         return 0
 
     if args.cmd == "join-check":

@@ -1,0 +1,5 @@
+{
+  "dim": 384,
+  "embedder_id": "sentence-transformers/all-MiniLM-L6-v2",
+  "n": 5374
+}

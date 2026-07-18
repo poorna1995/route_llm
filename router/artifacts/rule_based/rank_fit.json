@@ -1,0 +1,509 @@
+{
+  "role": "fit",
+  "n": 2278,
+  "n_with_strong": 2278,
+  "rank_order_pooled": [
+    "margin",
+    "p_max",
+    "H",
+    "top2_mass",
+    "C_atypical",
+    "C_linguistic",
+    "C_query",
+    "C_length",
+    "C_density"
+  ],
+  "feature_sets": {
+    "S_H": [
+      "H"
+    ],
+    "S_p": [
+      "p_max"
+    ],
+    "S_md": [
+      "H",
+      "p_max",
+      "margin"
+    ],
+    "S_all": [
+      "C_length",
+      "C_density",
+      "C_atypical",
+      "C_linguistic",
+      "C_query",
+      "H",
+      "p_max",
+      "margin",
+      "top2_mass"
+    ],
+    "S_top2": [
+      "margin",
+      "p_max"
+    ],
+    "S_top4": [
+      "margin",
+      "p_max",
+      "H",
+      "top2_mass"
+    ],
+    "S_top5": [
+      "margin",
+      "p_max",
+      "H",
+      "top2_mass",
+      "C_atypical"
+    ]
+  },
+  "rows": [
+    {
+      "slice": "pooled",
+      "feature": "C_length",
+      "direction": 1,
+      "auroc": 0.4566825145272055,
+      "auroc_flipped": 0.5433174854727945,
+      "best_auroc": 0.5433174854727945,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "C_density",
+      "direction": 1,
+      "auroc": 0.44812810010908266,
+      "auroc_flipped": 0.5518718998909173,
+      "best_auroc": 0.5518718998909173,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "C_atypical",
+      "direction": 1,
+      "auroc": 0.5210824568986218,
+      "auroc_flipped": 0.4789175431013783,
+      "best_auroc": 0.5210824568986218,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "C_linguistic",
+      "direction": 1,
+      "auroc": 0.49670076357873505,
+      "auroc_flipped": 0.503299236421265,
+      "best_auroc": 0.503299236421265,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "C_query",
+      "direction": 1,
+      "auroc": 0.47163507385377434,
+      "auroc_flipped": 0.5283649261462257,
+      "best_auroc": 0.5283649261462257,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "H",
+      "direction": 1,
+      "auroc": 0.7558290626436427,
+      "auroc_flipped": 0.24417093735635734,
+      "best_auroc": 0.7558290626436427,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "p_max",
+      "direction": -1,
+      "auroc": 0.7589073894937604,
+      "auroc_flipped": 0.24109261050623967,
+      "best_auroc": 0.7589073894937604,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "margin",
+      "direction": -1,
+      "auroc": 0.7607645392114489,
+      "auroc_flipped": 0.23923546078855112,
+      "best_auroc": 0.7607645392114489,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "pooled",
+      "feature": "top2_mass",
+      "direction": -1,
+      "auroc": 0.609991012685149,
+      "auroc_flipped": 0.390008987314851,
+      "best_auroc": 0.609991012685149,
+      "n": 2278,
+      "n_pos": 385
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "C_length",
+      "direction": 1,
+      "auroc": 0.548694808775454,
+      "auroc_flipped": 0.45130519122454604,
+      "best_auroc": 0.548694808775454,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "C_density",
+      "direction": 1,
+      "auroc": 0.4525237307495372,
+      "auroc_flipped": 0.5474762692504628,
+      "best_auroc": 0.5474762692504628,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "C_atypical",
+      "direction": 1,
+      "auroc": 0.5382030603804797,
+      "auroc_flipped": 0.4617969396195203,
+      "best_auroc": 0.5382030603804797,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "C_linguistic",
+      "direction": 1,
+      "auroc": 0.5225934459805428,
+      "auroc_flipped": 0.47740655401945725,
+      "best_auroc": 0.5225934459805428,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "C_query",
+      "direction": 1,
+      "auroc": 0.5210770412383315,
+      "auroc_flipped": 0.47892295876166846,
+      "best_auroc": 0.5210770412383315,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "H",
+      "direction": 1,
+      "auroc": 0.8358811887037694,
+      "auroc_flipped": 0.16411881129623065,
+      "best_auroc": 0.8358811887037694,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "p_max",
+      "direction": -1,
+      "auroc": 0.8411566032533775,
+      "auroc_flipped": 0.15884339674662254,
+      "best_auroc": 0.8411566032533775,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "margin",
+      "direction": -1,
+      "auroc": 0.841764642167868,
+      "auroc_flipped": 0.15823535783213202,
+      "best_auroc": 0.841764642167868,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "mc_pooled",
+      "feature": "top2_mass",
+      "direction": -1,
+      "auroc": 0.8095041159557289,
+      "auroc_flipped": 0.19049588404427115,
+      "best_auroc": 0.8095041159557289,
+      "n": 1278,
+      "n_pos": 186
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "C_length",
+      "direction": 1,
+      "auroc": 0.5440608734617903,
+      "auroc_flipped": 0.45593912653820967,
+      "best_auroc": 0.5440608734617903,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "C_density",
+      "direction": 1,
+      "auroc": 0.4592826858777705,
+      "auroc_flipped": 0.5407173141222295,
+      "best_auroc": 0.5407173141222295,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "C_atypical",
+      "direction": 1,
+      "auroc": 0.516709179276826,
+      "auroc_flipped": 0.483290820723174,
+      "best_auroc": 0.516709179276826,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "C_linguistic",
+      "direction": 1,
+      "auroc": 0.5093326669194443,
+      "auroc_flipped": 0.49066733308055566,
+      "best_auroc": 0.5093326669194443,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "C_query",
+      "direction": 1,
+      "auroc": 0.5067819103098825,
+      "auroc_flipped": 0.49321808969011754,
+      "best_auroc": 0.5067819103098825,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "H",
+      "direction": 1,
+      "auroc": 0.8551282272241564,
+      "auroc_flipped": 0.14487177277584365,
+      "best_auroc": 0.8551282272241564,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "p_max",
+      "direction": -1,
+      "auroc": 0.8591697976629554,
+      "auroc_flipped": 0.14083020233704457,
+      "best_auroc": 0.8591697976629554,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "margin",
+      "direction": -1,
+      "auroc": 0.8590060666643687,
+      "auroc_flipped": 0.14099393333563132,
+      "best_auroc": 0.8590060666643687,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "arc_challenge",
+      "feature": "top2_mass",
+      "direction": -1,
+      "auroc": 0.8282160215090828,
+      "auroc_flipped": 0.17178397849091723,
+      "best_auroc": 0.8282160215090828,
+      "n": 1000,
+      "n_pos": 134
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "C_length",
+      "direction": 1,
+      "auroc": 0.44073363070031807,
+      "auroc_flipped": 0.5592663692996819,
+      "best_auroc": 0.5592663692996819,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "C_density",
+      "direction": 1,
+      "auroc": 0.47289506207692644,
+      "auroc_flipped": 0.5271049379230736,
+      "best_auroc": 0.5271049379230736,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "C_atypical",
+      "direction": 1,
+      "auroc": 0.4735035978895727,
+      "auroc_flipped": 0.5264964021104273,
+      "best_auroc": 0.5264964021104273,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "C_linguistic",
+      "direction": 1,
+      "auroc": 0.5164932025922371,
+      "auroc_flipped": 0.4835067974077629,
+      "best_auroc": 0.5164932025922371,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "C_query",
+      "direction": 1,
+      "auroc": 0.45923751090031933,
+      "auroc_flipped": 0.5407624890996807,
+      "best_auroc": 0.5407624890996807,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "H",
+      "direction": 1,
+      "auroc": 0.7187403936034731,
+      "auroc_flipped": 0.281259606396527,
+      "best_auroc": 0.7187403936034731,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "p_max",
+      "direction": -1,
+      "auroc": 0.7187403936034731,
+      "auroc_flipped": 0.281259606396527,
+      "best_auroc": 0.7187403936034731,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "margin",
+      "direction": -1,
+      "auroc": 0.7187403936034731,
+      "auroc_flipped": 0.281259606396527,
+      "best_auroc": 0.7187403936034731,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "hotpotqa",
+      "feature": "top2_mass",
+      "direction": -1,
+      "auroc": 0.5738335874127191,
+      "auroc_flipped": 0.426166412587281,
+      "best_auroc": 0.5738335874127191,
+      "n": 1000,
+      "n_pos": 199
+    },
+    {
+      "slice": "mmlu",
+      "feature": "C_length",
+      "direction": 1,
+      "auroc": 0.5425884955752213,
+      "auroc_flipped": 0.45741150442477874,
+      "best_auroc": 0.5425884955752213,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "C_density",
+      "direction": 1,
+      "auroc": 0.4182266848196052,
+      "auroc_flipped": 0.5817733151803949,
+      "best_auroc": 0.5817733151803949,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "C_atypical",
+      "direction": 1,
+      "auroc": 0.5392699115044248,
+      "auroc_flipped": 0.46073008849557523,
+      "best_auroc": 0.5392699115044248,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "C_linguistic",
+      "direction": 1,
+      "auroc": 0.5414823008849557,
+      "auroc_flipped": 0.45851769911504425,
+      "best_auroc": 0.5414823008849557,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "C_query",
+      "direction": 1,
+      "auroc": 0.5071477195371,
+      "auroc_flipped": 0.4928522804628999,
+      "best_auroc": 0.5071477195371,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "H",
+      "direction": 1,
+      "auroc": 0.7601259360108917,
+      "auroc_flipped": 0.23987406398910824,
+      "best_auroc": 0.7601259360108917,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "p_max",
+      "direction": -1,
+      "auroc": 0.7698689584751531,
+      "auroc_flipped": 0.23013104152484684,
+      "best_auroc": 0.7698689584751531,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "margin",
+      "direction": -1,
+      "auroc": 0.7730173587474473,
+      "auroc_flipped": 0.22698264125255277,
+      "best_auroc": 0.7730173587474473,
+      "n": 278,
+      "n_pos": 52
+    },
+    {
+      "slice": "mmlu",
+      "feature": "top2_mass",
+      "direction": -1,
+      "auroc": 0.7384700476514636,
+      "auroc_flipped": 0.26152995234853643,
+      "best_auroc": 0.7384700476514636,
+      "n": 278,
+      "n_pos": 52
+    }
+  ]
+}
