@@ -1,0 +1,180 @@
+\section{Problem Formulation}
+\label{sec:problem}
+
+We formalize \textbf{unsupervised LLM routing}: selecting a model for a query from estimated routing signals, in contrast to supervised routers that learn a mapping from queries to models using preference, quality-gap, or correctness labels (Section~\ref{sec:related}).
+We first define the routing setting and notation, then state the supervised baseline we depart from, then define our signal-based formulation and decision procedures.
+
+\subsection{Setup and Notation}
+\label{sec:setup}
+
+Let $\mathcal{Q}$ denote a space of input queries.
+Each query $q\in\mathcal{Q}$ is a prompt string (including multiple-choice options when present).
+Let $\mathcal{M}=\{M_1,\ldots,M_K\}$ denote a fixed pool of candidate LLMs, ordered by increasing capability and cost.
+For exposition we often write $M_{\mathrm{weak}}$ and $M_{\mathrm{strong}}$ for a binary weak/strong pair, but the formulation applies to $K\ge 2$.
+
+Each model $M\in\mathcal{M}$ incurs a nonnegative \textbf{cost} $c(M)$ per query (e.g., API price or relative call cost).
+Let $y_M(q)$ denote the response produced when $M$ answers $q$, and let $\mathrm{qual}(q,y)$ denote a task-appropriate quality score (accuracy, exact match, or a judge score) when ground truth or a reference is available.
+The routing objective is to choose a model per query that preserves response quality while limiting aggregate cost.
+
+A \textbf{router} is a function
+\begin{equation}
+R:\mathcal{Q}\to\mathcal{M}
+\end{equation}
+that assigns each incoming query to one candidate model.
+At deployment, only $R(q)$ is executed to produce the final answer (single-model routing); we do not consider multi-model cascades or ensembles in the core formulation.
+
+Queries are partitioned into three disjoint roles: \textbf{fit}, \textbf{calib}, and \textbf{eval}.
+Transforms estimated from data (geometry, z-scoring, thresholds, and optional combination weights) are fit on fit and/or calib only; eval is held out for reporting.
+
+\subsection{Supervised LLM Routing (Baseline)}
+\label{sec:supervised-baseline}
+
+In \textbf{supervised LLM routing}, one assumes access to a labeled dataset
+\begin{equation}
+\mathcal{D}_{\mathrm{sup}}=\bigl\{(q_i,\,\ell_i)\bigr\}_{i=1}^{N},
+\end{equation}
+where $\ell_i$ encodes a routing-relevant outcome for query $q_i$.
+Examples of $\ell_i$ in prior work include: a preference winner between a weak and strong model~\cite{ong2025routellm}; a quality-gap label indicating whether the small model matches the large~\cite{ding2024hybrid}; an empirical correctness score $y_{ij}$ for every query--model pair~\cite{song2025irt}; or an uncertainty-derived winner label~\cite{zhang2025uncertainty}.
+A parametric router $R_\theta$ is trained to predict $\ell$ from $q$ (and sometimes from model metadata), e.g.,
+\begin{equation}
+\hat{P}_\theta(\text{strong wins}\mid q)\quad\text{or}\quad \hat{y}_{ij}=f_\theta(q,M_j),
+\end{equation}
+and deployment routes by thresholding a cost--quality score.
+The learning target is therefore a \emph{labeled query-to-model assignment} or win probability learned from prior outcomes.
+
+Our work does \emph{not} treat $\mathcal{D}_{\mathrm{sup}}$ as the primary object.
+Gold labels may appear only in \textbf{evaluation} (to measure whether a routed model was correct) or, optionally, in a small \textbf{calib} split to learn combination weights over signals (Section~\ref{sec:weighting})---not to learn a preference-trained map $q\mapsto M$ from scratch.
+
+\subsection{Unsupervised LLM Routing}
+\label{sec:unsupervised-def}
+
+We study \textbf{unsupervised LLM routing}: given a query $q$, estimate a vector of \textbf{routing signals} and decide which model to call from those signals, without training the router on large-scale preference or outcome labels.
+
+We distinguish two signal classes:
+
+\paragraph{Model-independent signals.}
+A signal $s(q)$ depends only on the query (and frozen preprocessing), not on any $M\in\mathcal{M}$.
+We represent these by a feature vector $\phi(q)$ and a scalar query complexity score $C(q)=g(\phi(q))$ (Section~\ref{sec:method-indep}).
+$C(q)$ is computed \emph{before} calling any candidate LLM and captures surface load, linguistic demand, task form, and semantic atypicality relative to the fit distribution.
+
+\paragraph{Model-dependent signals.}
+A signal $s(q,M)$ characterizes the interaction between query $q$ and a specific candidate model $M$.
+We write $\psi(q,M)$ for the model-dependent feature vector.
+Two primary quantities are:
+\begin{itemize}
+    \item \textbf{Answer uncertainty} $H(q\mid M)\equiv H(Y\mid q,M)$: entropy of the model's answer distribution on $q$.
+    For multiple-choice queries, $Y$ is the predicted option letter and $H$ is computed from the renormalized option-letter distribution produced by a single probe of $M$.
+    For short free-form tasks, $H$ is computed from discrete clusters of sampled answers.
+    \item \textbf{Paraphrase-based uncertainty} $U(q\mid M)$: instability of $M$'s answers when the same information need is expressed in multiple surface forms.
+    We generate paraphrases of the question text, probe $M$ on each surface form, and measure disagreement among predictions.
+\end{itemize}
+Additional monotone transforms of the probe (e.g., maximum option probability, margin between top choices) are recorded as coordinates of $\psi(q,M)$.
+Computing $\psi$ requires at least one \textbf{probe} of $M$ on $q$; we therefore do not claim query-only routing in the strict sense of RouteLLM, but we also do not require preference-scale supervision to define the signals.
+
+\paragraph{Joint signal vector.}
+For a candidate model $M$, define the combined feature vector
+\begin{equation}
+\mathbf{z}(q,M)=\bigl[\,\phi(q),\;\psi(q,M)\,\bigr].
+\end{equation}
+Model-independent terms are shared across candidates; model-dependent terms are computed per $(q,M)$ pair.
+
+\paragraph{Operational complexity.}
+We adopt the routing-oriented definition used throughout this paper:
+\begin{quote}
+A query is more complex if a weaker or cheaper model is more likely to fail on it, so the system should escalate to a stronger or costlier model.
+\end{quote}
+Signals are designed as proxies for this escalation need; their empirical relation to weak-model failure and to the need for a strong model is evaluated on fit and reported on eval (Section~\ref{sec:experiments}).
+
+\subsection{Routing Decision Rules}
+\label{sec:decision}
+
+Let $\mathbf{z}(q,M)$ denote the signal vector for query $q$ and candidate $M$.
+A routing policy selects $R(q)\in\mathcal{M}$ from these signals.
+We consider two families of policies.
+
+\paragraph{Rule-based routing.}
+Hand-specified rules map signal thresholds to escalation.
+A canonical binary rule uses query complexity alone:
+\begin{equation}
+R_{\mathrm{C}}(q)=
+\begin{cases}
+M_{\mathrm{strong}} & \text{if } C(q)\ge \tau_C,\\
+M_{\mathrm{weak}} & \text{otherwise},
+\end{cases}
+\end{equation}
+where $\tau_C$ is chosen on calib.
+Model-dependent rules escalate when uncertainty is high, e.g.,
+\begin{equation}
+R_{\mathrm{H}}(q)=
+\begin{cases}
+M_{\mathrm{strong}} & \text{if } H(q\mid M_{\mathrm{weak}})\ge \tau_H \;\lor\; U(q\mid M_{\mathrm{weak}})\ge \tau_U,\\
+M_{\mathrm{weak}} & \text{otherwise},
+\end{equation}
+with thresholds $(\tau_H,\tau_U)$ set on calib.
+Rules are interpretable and require no gradient training; they serve as baselines and ablations.
+
+\paragraph{Parameter-weighted routing.}
+\label{sec:weighting}
+When multiple signal coordinates are available, a scalar routing score is formed by a weighted combination.
+For binary weak/strong routing, define
+\begin{equation}
+S(q; \boldsymbol{\lambda})=
+\sum_{j=1}^{d} \lambda_j\, z_j(q, M_{\mathrm{weak}}),
+\qquad
+R_{\boldsymbol{\lambda}}(q)=
+\begin{cases}
+M_{\mathrm{strong}} & \text{if } S(q;\boldsymbol{\lambda})\ge \tau,\\
+M_{\mathrm{weak}} & \text{otherwise},
+\end{cases}
+\end{equation}
+where $\mathbf{z}$ may include both $\phi(q)$ and $\psi(q,M_{\mathrm{weak}})$, $\boldsymbol{\lambda}\in\mathbb{R}^d$ are combination weights, and $\tau$ is a threshold.
+Crucially, $\boldsymbol{\lambda}$ and $\tau$ are the only quantities tuned from labeled calib data in this variant; the signals themselves are defined \emph{a priori} and are not trained from preference or Arena-style labels.
+This implements the professor-guided split: \emph{unsupervised signal extraction} first, \emph{optional parameter weighting} second---distinct from supervised routers that learn $\theta$ directly from $\mathcal{D}_{\mathrm{sup}}$.
+
+For $K>2$, the same score can be evaluated per candidate and the model with lowest predicted risk or highest predicted success selected; we restrict experiments to binary pools for direct comparison with RouteLLM and Hybrid LLM.
+
+\subsection{Evaluation Objectives}
+\label{sec:eval-objectives}
+
+We evaluate routing on held-out eval queries using standard cost--quality metrics from the LLM routing literature~\cite{ong2025routellm,ding2024hybrid}.
+Let $r(R)$ denote average response quality under router $R$, and let $c(R)$ denote the fraction of queries routed to the strong (or highest-cost) model.
+
+\paragraph{Performance gap recovered (PGR).}
+For a binary pool,
+\begin{equation}
+\mathrm{PGR}(R)=
+\frac{r(R)-r(M_{\mathrm{weak}})}{r(M_{\mathrm{strong}})-r(M_{\mathrm{weak}})},
+\end{equation}
+measuring how much of the quality gap between weak and strong is recovered.
+
+\paragraph{Call-performance threshold (CPT).}
+$\mathrm{CPT}(x\%)$ is the minimum fraction of strong-model calls required to reach a target PGR of $x\%$.
+Lower CPT at fixed quality recovery indicates more cost-efficient routing.
+
+Signal quality is also assessed \emph{before} fixing a deployment policy: on fit, we measure whether each signal family ranks queries on which the weak model fails or on which the strong model is needed (e.g., ROC-AUC of $H(q\mid M_{\mathrm{weak}})$ or $C(q)$ against weak-model error).
+Negative or weak correlations are reported when present; the formulation does not assume that every signal must be predictive.
+
+\subsection{Scope and Assumptions}
+\label{sec:scope}
+
+The present formulation covers \textbf{LLM routing} over a fixed candidate pool.
+Extension to \textbf{agents} (orchestration plus an LLM) is left to future work.
+We assume:
+\begin{itemize}
+    \item a single routed model produces the final answer (no cascade in the core definition);
+    \item costs $c(M)$ are known and stationary;
+    \item model-dependent signals are computed from defined probes (option-letter distributions or short answer samples), not from hidden-state classifiers trained on routing labels;
+    \item gold answers are available for evaluation but are not used to train preference-style routers or to fit the unsupervised signal definitions on eval.
+\end{itemize}
+
+Figure~\ref{fig:problem-overview} summarizes the contrast between supervised routing (learn $q\to\ell\to M$ from labeled outcomes) and our pipeline (estimate $\phi(q)$ and $\psi(q,M)$, then decide via rules or $\boldsymbol{\lambda}$).
+
+% Optional figure — add when available:
+% \begin{figure}[t]
+% \centering
+% \includegraphics[width=\columnwidth]{figures/problem_overview.pdf}
+% \caption{Supervised routing learns from labeled outcomes; unsupervised routing estimates signals then decides.}
+% \label{fig:problem-overview}
+% \end{figure}
+
+In the following sections, Section~\ref{sec:method-indep} instantiates $\phi(q)$ and $C(q)$; Section~\ref{sec:method-dep} instantiates $\psi(q,M)$, $H$, and $U$; Section~\ref{sec:method-combine} describes how signals are combined in practice; Section~\ref{sec:experiments} reports signal validation and routing metrics on eval.

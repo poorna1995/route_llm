@@ -1,0 +1,38 @@
+# Model-dependent signals H(Y|q,M), U(q|M)
+# See WORKFLOW.md. Router (τ, λ) deferred.
+
+corpus_dir: datasets/processed/corpus_v1
+# Layout: {role}_{model_role}.jsonl  (fit_weak.jsonl, fit_strong.jsonl) — never shared
+# Backups: processed/backups/{stem}.{utc}.jsonl (auto before each write; restore via
+#   ./run.sh query-model-restore --stem fit_weak --list
+#   ./run.sh query-model-restore --stem fit_weak
+output_dir: signals/query_model/processed
+artifact_dir: signals/query_model/artifacts
+datasets_config: datasets/config.yaml
+
+# primary | ablation | local_strong | local_strong_gemma
+# local_strong = 8B + Qwen2.5-32B; local_strong_gemma = 8B + Gemma-2-27B-IT
+experiment: primary
+
+backend: mock  # mock | hf (hf not wired in v1 smoke)
+
+paraphrase:
+  enabled: true
+  k: 3
+
+mc:
+  temperature: 0.0
+
+hotpot:
+  n_samples: 3          # was 5 — fewer samples, faster; coarser cluster entropy
+  temperature: 0.7
+  max_new_tokens: 24    # was 48 — short Hotpot answers; enough for EM
+  seed: 42
+
+# Optional USD estimates written into each row's cost.usd_est (per 1M tokens).
+# Keys may be HF model id or model_role (weak / strong). Leave empty to skip $.
+pricing: {}
+# Example:
+# pricing:
+#   weak:  { input_per_mtok: 0.0, output_per_mtok: 0.0 }
+#   strong: { input_per_mtok: 0.0, output_per_mtok: 0.0 }

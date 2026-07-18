@@ -1,0 +1,417 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\setup}{\paragraph{Setup.}}
+\newcommand{\problem}{\paragraph{Problem.}}
+\newcommand{\rootcause}{\paragraph{Root cause.}}
+\newcommand{\solution}{\paragraph{Solution.}}
+\newcommand{\payoff}{\paragraph{Payoff.}}
+
+\title{Vizuara Inference Book --- Phase 1\\
+\large Lecture Notes (Study Companion)}
+\author{Aligned to the public Phase~1 curriculum\\
+\href{https://inference.vizuara.ai/}{inference.vizuara.ai} $\cdot$
+\href{https://maven.com/vizuara/inference-workshop}{Maven workshop}\\[0.4em]
+Narration: Basics $\rightarrow$ Problem $\rightarrow$ Root cause $\rightarrow$ Solution $\rightarrow$ Payoff}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Study notes mapped to the Vizuara Inference Book Phase~1 outline
+(Hardware Labs, L1--L8, bonus).
+These are \textbf{not} a transcript of paid videos or private slides.
+Mechanisms are anchored to public papers and blogs.
+Use the same interview narration as the
+\href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{PagedAttention teaching video}:
+never open with the acronym---open with the failure mode.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\section{Curriculum map}
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}lY@{}}
+\toprule
+\textbf{Block} & \textbf{Focus in these notes} \\
+\midrule
+Inference Book Phase 1 & Why inference is its own discipline \\
+Hardware Labs (6) & Device-specific bottlenecks and measurement \\
+Visual Walkthroughs (1) & How to study diagrams \\
+L1 Intro (4) & Prefill/decode, latency/throughput, memory, roofline \\
+L2 KV Cache (5) & Good (no recompute) and evil (memory/fragmentation) \\
+Bonus + YC (3) & Product/ROI framing \\
+L3 Attention P1 (6) & MHA, MQA, GQA, latent, sparse \\
+L4 Attention P2 (3) & Sliding window, SSM, Mamba \\
+L5 FlashAttention (4) & FA1 / FA2 / FA3 IO story \\
+L6 vLLM step (6) & Continuous batching, PagedAttention, scheduler loop \\
+L7 Quantization (4) & GPTQ, AWQ, GGUF, what tensors you shrink \\
+L8 Speculative decoding & Draft--verify, EAGLE/Medusa family \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Block 0 --- Why inference engineering exists}
+\setup Training produces weights; users experience serving.
+\problem Notebook \texttt{generate()} collapses under concurrency, long context, and cost.
+\rootcause Autoregressive decode is multi-tenant and often memory-bandwidth bound.
+\solution A dedicated stack: hardware $\rightarrow$ kernels $\rightarrow$ KV/attention design $\rightarrow$ scheduler $\rightarrow$ quant $\rightarrow$ speculation.
+\payoff Answer production design interviews end-to-end~\cite{vizuara-site}.
+
+\section{Mental model bridge --- Entropy}
+\paragraph{Video / notes.}
+\href{https://www.youtube.com/watch?v=q3agYqgqklU}{Entropy: AI Mental Model \#9}~\cite{vizuara-entropy-yt};
+\href{https://vizuaraai.github.io/great-mental-models-of-ai/lecture-09-entropy.html}{free visual lecture notes}.
+
+Do not open with $-\sum p\log p$. Story:
+disorder as a \textbf{count of arrangements} $\rightarrow$
+Boltzmann $S=k\log W$ $\rightarrow$
+Shannon surprise $-\log p$, entropy = expected surprise $\rightarrow$
+AI uses.
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Cross-entropy:} next-token / classification loss $= -\log p_{\mathrm{true}}$ (training surprise).
+  \item \textbf{Perplexity:} effective branching factor of uncertainty; lower $\Rightarrow$ more confident LM on that data.
+  \item \textbf{Temperature:} low $T$ peaks (low entropy); high $T$ flattens (high entropy). Same named analogy as physical temperature spreading molecules.
+  \item \textbf{KL / relative entropy:} extra surprise of wrong belief vs reference --- PPO/RLHF KL penalty, VAEs, diffusion, distillation.
+\end{itemize}
+\noindent One-liner: uncertainty / surprise / confidence / belief-distance $\Rightarrow$ reach for entropy.
+
+\section{Mental model bridge --- Diffusion}
+\paragraph{Video / notes.}
+\href{https://www.youtube.com/watch?v=bTEfdB2D1Ek}{Diffusion: AI Mental Model \#7}~\cite{vizuara-diffusion-yt};
+\href{https://vizuaraai.github.io/great-mental-models-of-ai/lecture-07-reverse-the-corruption.html}{free visual lecture notes}.
+
+Do not open with DDPM equations. Story:
+\begin{enumerate}[leftmargin=*]
+  \item Naive plan: teach a machine to draw from scratch.
+  \item Diffusion plan: \textbf{to create, first destroy} carefully, then reverse.
+  \item Forward: add noise step by step until (near) pure noise; remember the noise path.
+  \item Train: undo \emph{one} tiny corruption (often predict the added noise).
+  \item Generate: start from pure noise; iterate denoising until structure appears.
+\end{enumerate}
+\noindent Why it works: one hard leap becomes many easy reverse steps.
+Domains: images, video, audio, molecules; also emerging \textbf{diffusion LMs} that refine tokens in parallel vs autoregressive left-to-right decode (L1).
+Phase~1 stack (KV, GQA, PagedAttention, speculation) primarily targets AR decode---name the generator family first.
+
+\section{Mental model bridge --- Expressivity}
+\paragraph{Video / notes.}
+\href{https://www.youtube.com/watch?v=YE0udJCgDqc}{Expressivity: AI Mental Model \#6}~\cite{vizuara-expressivity-yt};
+\href{https://vizuaraai.github.io/great-mental-models-of-ai/lecture-06-expressivity.html}{free visual lecture notes}.
+
+Opposite of compression: if stuck, \textbf{lift} into a richer space.
+\begin{itemize}[leftmargin=*]
+  \item XOR / kernel picture: not separable in 2D; add a dimension $\Rightarrow$ plane separates.
+  \item Regression: higher degree $=$ more expressivity; too much $\Rightarrow$ overfit noise.
+  \item Transformers: FFN expands tokens to a wider hidden size (often $\sim$4$\times$) then projects back --- capacity to hold patterns; attention moves information across tokens.
+  \item Also: CNN feature stacks, NeRF Fourier lifts of coordinates.
+\end{itemize}
+\noindent One-liner: if you cannot solve it, lift it --- then stop before you fit noise.
+Serving (Phase~1) often \emph{reduces} bytes after a model is already expressive enough.
+
+\section{Mental model bridge --- Compression}
+\paragraph{Video / notes.}
+\href{https://www.youtube.com/watch?v=hGS6RbAYLl0}{Compression: AI Mental Model \#5}~\cite{vizuara-compression-yt};
+\href{https://vizuaraai.github.io/great-mental-models-of-ai/lecture-05-compression.html}{free visual lecture notes}.
+
+When something is too big, find the \textbf{narrow waist}: squeeze $\rightarrow$ work small $\rightarrow$ project up.
+Surprise: little is lost because data/weights often live on a lower-dimensional manifold (not full of independent facts).
+
+\begin{tabularx}{\textwidth}{@{}lYYY@{}}
+\toprule
+\textbf{Example} & \textbf{Big} & \textbf{Waist} & \textbf{Back up} \\
+\midrule
+BPE & Char streams & Subword codes & Detokenize \\
+Latent diffusion & Pixels & VAE latent & Decoder \\
+MLA & Full K,V cache & Latent KV & Expand to K,V \\
+LoRA & $\Delta W$ ($D\times D$) & $A,B$ with rank $r$ & $AB$ \\
+World models & Raw frames & Tiny latent & Dream/control in latent \\
+\bottomrule
+\end{tabularx}
+
+\noindent Do not confuse \textbf{GQA} (share K/V across query groups) with \textbf{MLA} (compress into a latent).
+One-liner: when it is too big, find the waist.
+
+\section{Hardware Labs}
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}llY@{}}
+\toprule
+\textbf{Lab} & \textbf{Device} & \textbf{Typical bottleneck / practice} \\
+\midrule
+1 & Laptop/PC & \texttt{llama.cpp}/MLX; tok/s vs model size \\
+2 & Raspberry Pi 4 & ARM: INT4 vs INT8 latency/quality/power \\
+3 & Android & On-device RAM + thermals (SmolChat-style) \\
+Opt. & Jetson Orin Nano & Small CUDA + TensorRT-LLM demos \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\noindent Always report model, quant, context, batch, tok/s, and memory.
+Cloud A100 numbers do not transfer to a Pi---the roofline changed~\cite{vizuara-site,maven-course}.
+
+\section{Visual walkthrough study method}
+\begin{enumerate}[leftmargin=*]
+\item Pause before the solution; state the problem in one sentence.
+\item Name the naive approach and where it breaks.
+\item Watch the mechanism; redraw from memory.
+\item Deliver a 60--90s interview answer aloud.
+\end{enumerate}
+
+\section{Foundation interview --- Transformer architecture}
+\paragraph{Teaching video.}
+\href{https://www.youtube.com/watch?v=c533te7NSpI}{LLM Interview Series \#3: What Is the Transformer Architecture?}~\cite{vizuara-transformer-yt}.
+
+Chat/LLM interviews: focus on \textbf{decoder-only} stacks (original paper had encoder+decoder).
+
+\textbf{Depth 1 --- whole LM:} input (token + position $\to$ embeddings) $\rightarrow$ processor (stacked Transformer blocks) $\rightarrow$ output (logits over vocab).
+
+\textbf{Depth 2 --- stack:} many identical blocks; composable depth.
+
+\textbf{Depth 3 --- one block (eight modules in the video's drawing):}
+LayerNorm/RMSNorm $\rightarrow$ multi-head attention $\rightarrow$ dropout $\rightarrow$ residual $\rightarrow$
+LayerNorm/RMSNorm $\rightarrow$ FFN $\rightarrow$ dropout $\rightarrow$ residual.
+
+\begin{itemize}[leftmargin=*]
+  \item Attention: only place tokens mix; causal mask; input vectors $\to$ context vectors.
+  \item FFN: per-token expand ($\sim$4$\times d$) + GELU/SwiGLU + contract --- expressivity; no inter-token mix.
+  \item Residuals: alternate gradient path (vanishing gradients).
+  \item Dropout: training regularization / generalization.
+\end{itemize}
+
+\textbf{Depth 4 --- attention internals:} $Q,K,V$; $QK^\top$; scale; mask; softmax; $\times V$.
+Modern knobs: RoPE, RMSNorm, SwiGLU, MoE/GQA/MLA on attention or FFN.
+Deliver big picture first, then zoom --- do not stop at ``attention + FFN.''
+
+\section{Foundation interview --- Attention}
+\paragraph{Teaching video.}
+\href{https://www.youtube.com/watch?v=cquX2tOODUI}{LLM Interview Series \#4: What is Attention?}~\cite{vizuara-attention-yt}.
+
+Do not open with ``focus on important tokens.'' Two depths:
+
+\textbf{Conceptual:} without attention, tokens are islands (Harry/he, dog/ball \emph{it}s).
+Attention captures links: which past tokens matter and how much.
+
+\textbf{Matrix:} place the module in the Transformer; then
+$Q,K,V=XW_{Q,K,V}$; scores $QK^\top$ (row $i$ = how token $i$ attends over keys);
+causal mask (no future); scale + softmax $\to$ weights; context $=$ weights $\times V$.
+
+\textbf{Multi-head:} multiple score matrices / perspectives (ambiguous attachments).
+Follow-ons: KV cache~\cite{vizuara-kv-yt}, GQA~\cite{vizuara-gqa-yt}.
+Lead the interview: bird's-eye $\to$ need $\to$ math $\to$ pause for their next question.
+
+\section{Application interview --- RAG vs fine-tuning}
+\paragraph{Teaching video.}
+\href{https://www.youtube.com/watch?v=cCXjumE70-g}{LLM Interview Series \#8: RAG vs Fine-Tuning}~\cite{vizuara-rag-ft-yt}.
+
+Do not open with a two-line slogan and stop. This question tests \textbf{system choice} for a vague domain chatbot.
+
+\subsection{RAG --- problem before the name}
+\setup Owned corpus (e.g.\ nutrition guidelines) must ground answers.
+\problem Stuffing the whole library into context fails when tokens $\gg$ context window.
+\rootcause Context is scarce; only a slice is relevant per query.
+\solution Chunk $\to$ embed $\to$ retrieve top-$k$ $\to$ generate with query + chunks.
+Weights stay fixed. Analogy: \textbf{open-book exam}.
+
+\subsection{Fine-tuning --- from pretraining}
+Raw pretrained LMs are weak at instructions. Curate a much smaller supervised QA set and \textbf{nudge weights}.
+Key contrast: fine-tuning changes parameters; RAG does not.
+
+\subsection{When which}
+\begin{itemize}
+  \item Digital clone / speaking patterns on novel questions $\to$ fine-tuning (RAG only retrieves posts; does not encode style).
+  \item Grounded pharma/nutrition lookup $\to$ start with RAG (cheaper, simpler).
+  \item Escalation: RAG $\to$ fine-tune pretrained model $\to$ pretrain SLM from scratch (only if needed).
+\end{itemize}
+
+\subsection{Comparison axes}
+Patterns (no / yes), cost (low / high), simplicity (high / low), personalization (weak / strong).
+Analogy: open book vs study the night before (no book in the exam room).
+Real systems may combine both after you show the primary tradeoff.
+
+\section{Lecture 1 --- Introduction to Inference Engineering}
+\subsection{Prefill vs decode}
+\setup Prompt in, tokens out.
+\problem ``Inference'' as one blob blocks optimization.
+\rootcause Next-token factorization forces sequential decode.
+\solution Prefill (parallel over prompt) vs decode (one/few new tokens per step).
+\payoff Every later lecture hangs on this split.
+
+\subsection{Latency vs throughput}
+Interactive TTFT/TPOT vs cluster tokens/sec are different objectives; continuous batching trades them~\cite{kwon2023vllm}.
+
+\subsection{Memory bill}
+Weights + activations + \textbf{KV cache} (often dominates at long context / high concurrency).
+
+\subsection{Roofline}
+Decode is frequently \textbf{memory-bound}; optimizations that do not cut bytes moved or steps taken will not move wall-clock.
+
+\section{Lecture 2 --- Good and Evil of KV Cache}
+\paragraph{Teaching video.}
+\href{https://www.youtube.com/watch?v=CxRGWfcGVbs}{LLM Interview Series \#1: What exactly is the KV Cache?}~\cite{vizuara-kv-yt}.
+
+Do not open with ``it makes generation faster.'' Story:
+\begin{enumerate}[leftmargin=*]
+  \item KV cache is an \textbf{inference} idea (weights already fixed).
+  \item Prefill: process all prompt tokens (parallel); emit first token; \textbf{store} $K,V$ for the prompt.
+  \item Decode: one new token at a time.
+  \item Naive decode recomputes full $Q,K,V$ every step --- wastes work because past $K,V$ cannot change.
+  \item Two realizations: (i) only the \emph{latest} context vector is needed; (ii) that still requires \emph{full} $K$ and $V$, but not recomputed --- append new $k,v$ only.
+  \item Use only new $q$ against full $K$; mix full $V$. No Q-cache: historical $Q$ is not needed for the next token.
+  \item Good: fewer FLOPs / better latency. Evil: memory + HBM traffic grow with length (bridge to GQA/MLA, PagedAttention).
+\end{enumerate}
+
+Unknown output length + contiguous reservation $\Rightarrow$ fragmentation $\Rightarrow$ PagedAttention (L6).
+Related names---prefix cache, chunked prefill, eviction/compression---tie each to a specific KV failure mode before naming them.
+
+\section{Bonus --- Inference and YCombinator}
+Sell latency SLAs and \$/M tokens, not ``Transformers.''
+Prioritize by ROI: stop OOM / raise batch $\rightarrow$ shrink KV $\rightarrow$ quantize $\rightarrow$ speculate $\rightarrow$ exotic kernels.
+
+\section{Lecture 3 --- Attention Variants Part 1}
+\paragraph{Teaching video.}
+\href{https://www.youtube.com/watch?v=mtsY7JsGQjw}{Vizuara Interview Series \#6: What Is Grouped Query Attention?}~\cite{vizuara-gqa-yt}.
+Do not open with the definition of GQA---tell this story.
+
+\subsection{Interview story (MHA $\rightarrow$ MQA $\rightarrow$ GQA)}
+\begin{enumerate}[leftmargin=*]
+  \item Locate MHA inside the Transformer block of the full LM.
+  \item Why multi-head: each head has its own scores; captures diverse linguistic perspectives~\cite{vaswani2017attention}.
+  \item MHA decode stores $K_1{\ldots}K_h$ and $V_1{\ldots}V_h$; KV size scales with KV heads; HBM$\to$compute traffic slows inference.
+  \item MQA~\cite{shazeer2019mqa}: keep distinct $Q$ heads; share one $K$ and one $V$ across all heads.
+        Store only one $K,V$. Huge KV cut; weaker multi-perspective modeling (diversity only from different $Q$s).
+  \item GQA~\cite{ainslie2023gqa}: partition heads into $g$ groups; share $K/V$ \emph{within} a group, differ \emph{across} groups.
+        Store one $K,V$ per group. Endpoints: $g{=}h$ is MHA; $g{=}1$ is MQA.
+  \item Spectrum: MHA = high KV + high quality; MQA = low KV + low quality; GQA sits in the middle for both.
+        Production open models often prefer GQA over pure MQA (e.g., Llama-family GQA; group count is a hyperparameter---check the model card).
+  \item Drawback: GQA is middle, not best-of-both. MLA is a \emph{different} later compression idea---do not equate with GQA.
+\end{enumerate}
+
+\subsection{Sparse attention}
+Avoid dense all-pairs when patterns allow; architecture-specific.
+
+\section{Lecture 4 --- Attention Variants Part 2}
+\subsection{Sliding window}
+Local (banded) attention; cost scales with window; long-range info must propagate via depth/other paths.
+
+\subsection{SSMs}
+Compress history into a state with cheaper asymptotics than dense attention.
+
+\subsection{Mamba~\cite{gu2023mamba}}
+Selective SSM + hardware-aware impl.; hybrid serving support is engine/version dependent---check current docs.
+
+\section{Lecture 5 --- FlashAttention 1, 2, 3}
+\setup Softmax attention.
+\problem Materializing $QK^\top$ thrashs HBM.
+\rootcause IO between HBM and SRAM, not only FLOPs.
+\solution
+\begin{itemize}[leftmargin=*]
+\item \textbf{FA1}~\cite{dao2022flash}: tiling, online softmax, exact attention, recompute in bwd.
+\item \textbf{FA2}: better parallelism/work partitioning; broader support incl.\ MQA/GQA paths in FA2 materials.
+\item \textbf{FA3}~\cite{dao2024flash3}: Hopper asynchrony (warp specialization, overlap matmul/softmax, FP8 path).
+\end{itemize}
+\payoff Faster exact attention; report speedups only for cited hardware.
+Interview line: FlashAttention changes the \textbf{IO schedule}, not the math definition of attention.
+
+\section{Lecture 6 --- Anatomy of a vLLM step}
+\subsection{Continuous batching}
+Admit/finish sequences every iteration so GPUs stay occupied~\cite{kwon2023vllm}.
+
+\subsection{PagedAttention~\cite{kwon2023vllm,vllmblog2023,vizuara-paged-yt}}
+\begin{enumerate}[leftmargin=*]
+\item Basics: weights, activations, KV.
+\item Problem: contiguous KV reservation wastes memory (fragmentation / over-reserve).
+\item Root cause: physical contiguity requirement.
+\item Solution: fixed-size blocks + block table + free list; on-demand non-contiguous allocation; optional sharing via refcount/CoW.
+\item Payoff: larger effective batches $\Rightarrow$ throughput.
+\end{enumerate}
+
+\subsection{One engine step (roles)}
+Schedule $\rightarrow$ allocate blocks $\rightarrow$ forward (prefill chunk and/or decode) $\rightarrow$ sample $\rightarrow$ update/free.
+Learn roles; class names drift across vLLM versions.
+
+\section{Lecture 7 --- Quantization}
+\setup FP16/BF16 weights (and KV) are large.
+\problem VRAM and bandwidth limit batch and tok/s.
+\solution Shrink bytes: GPTQ / AWQ (weight PTQ), GGUF ecosystem quants, optional KV/act quant---\textbf{name which tensors}.
+\payoff Fit more concurrency / smaller devices.
+\problem Always re-evaluate task quality after quant.
+
+\section{Lecture 8 --- Speculative decoding}
+\setup Large target $M_p$ decode is serial and expensive~\cite{leviathan2023speculative}.
+\problem Each output token roughly costs a target forward.
+\solution Draft $K$ tokens cheaply ($M_q$ / n-gram / Medusa / EAGLE); verify in parallel on $M_p$; reject/correct to preserve $M_p$'s distribution.
+\payoff Fewer target forwards when acceptance is high.
+Dial = acceptance rate; see also~\cite{vizuara-spec}.
+
+\section{Phase 1 end-to-end chain}
+\begin{lstlisting}[basicstyle=\ttfamily\small,frame=single]
+Hardware roofline
+  -> prefill/decode, latency vs throughput
+  -> KV cache (good/evil)
+  -> shrink KV: MQA/GQA/MLA/sparse/window/SSM
+  -> FlashAttention 1/2/3
+  -> vLLM: continuous batching + PagedAttention
+  -> quantization
+  -> speculative decoding
+  -> measure on real devices; ship a fast server
+\end{lstlisting}
+
+\section{Interview openers}
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}lY@{}}
+\toprule
+\textbf{Topic} & \textbf{Open with} \\
+\midrule
+KV cache & Prefill/decode recompute waste \\
+PagedAttention & Contiguous KV fragmentation \\
+GQA & MHA KV bandwidth at decode \\
+FlashAttention & HBM traffic / IO \\
+vLLM step & Multi-tenant batching needs a scheduler \\
+Quantization & Memory-bound decode + which tensors \\
+Speculative decoding & Serial target steps \\
+RAG vs fine-tuning & Context can't hold corpus / need grounded answers \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{thebibliography}{99}
+\bibitem{vizuara-site} Vizuara AI Labs. Inference Engineering Workshop. \url{https://inference.vizuara.ai/}.
+\bibitem{maven-course} Dr.~Raj Dandekar \& Yash Dixit. LLM Inference Engineering (Maven). \url{https://maven.com/vizuara/inference-workshop}.
+\bibitem{vizuara-entropy-yt} Vizuara. Entropy: AI Mental Model \#9. \url{https://www.youtube.com/watch?v=q3agYqgqklU}.
+\bibitem{vizuara-diffusion-yt} Vizuara. Diffusion: AI Mental Model \#7. \url{https://www.youtube.com/watch?v=bTEfdB2D1Ek}.
+\bibitem{vizuara-expressivity-yt} Vizuara. Expressivity: AI Mental Model \#6. \url{https://www.youtube.com/watch?v=YE0udJCgDqc}.
+\bibitem{vizuara-compression-yt} Vizuara. Compression: AI Mental Model \#5. \url{https://www.youtube.com/watch?v=hGS6RbAYLl0}.
+\bibitem{vizuara-kv-yt} Vizuara. LLM Interview Series \#1: What exactly is the KV Cache? \url{https://www.youtube.com/watch?v=CxRGWfcGVbs}.
+\bibitem{vizuara-transformer-yt} Vizuara. LLM Interview Series \#3: What Is the Transformer Architecture? \url{https://www.youtube.com/watch?v=c533te7NSpI}.
+\bibitem{vizuara-attention-yt} Vizuara. LLM Interview Series \#4: What is Attention? \url{https://www.youtube.com/watch?v=cquX2tOODUI}.
+\bibitem{vizuara-paged-yt} Vizuara. LLM Interview Series \#5: What Is PagedAttention? \url{https://www.youtube.com/watch?v=-AB6m0Spo6c}.
+\bibitem{vizuara-gqa-yt} Vizuara. LLM Interview Series \#6: What Is Grouped Query Attention? \url{https://www.youtube.com/watch?v=mtsY7JsGQjw}.
+\bibitem{vizuara-rag-ft-yt} Vizuara. LLM Interview Series \#8: RAG vs Fine-Tuning. \url{https://www.youtube.com/watch?v=cCXjumE70-g}.
+\bibitem{vizuara-spec} Vizuara. Speculative Decoding: Theory and Implementation in vLLM. \url{https://vizuara.substack.com/p/speculative-decoding-theory-and-implementation}.
+\bibitem{vaswani2017attention} Vaswani et~al. Attention is all you need. NeurIPS 2017.
+\bibitem{shazeer2019mqa} Noam Shazeer. Fast transformer decoding: One write-head is all you need. 2019.
+\bibitem{ainslie2023gqa} Ainslie et~al. GQA. EMNLP 2023.
+\bibitem{gu2023mamba} Gu \& Dao et~al. Mamba: Linear-time sequence modeling with selective state spaces. 2023.
+\bibitem{dao2022flash} Dao et~al. FlashAttention. NeurIPS 2022.
+\bibitem{dao2024flash3} Dao et~al. FlashAttention-3. NeurIPS 2024.
+\bibitem{kwon2023vllm} Kwon et~al. PagedAttention / vLLM. SOSP 2023.
+\bibitem{vllmblog2023} Kwon \& Li. vLLM blog. \url{https://vllm.ai/blog/2023-06-20-vllm}.
+\bibitem{leviathan2023speculative} Leviathan et~al. Speculative decoding. ICML 2023.
+\end{thebibliography}
+
+\end{document}

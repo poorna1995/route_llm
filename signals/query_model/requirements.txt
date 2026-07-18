@@ -1,0 +1,8 @@
+pyyaml>=6.0
+numpy>=1.26.0
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.27.0
+bitsandbytes>=0.42.0
+# Faster Hugging Face Hub downloads (enable via HF_HUB_ENABLE_HF_TRANSFER=1 in run.sh)
+hf_transfer>=0.1.6

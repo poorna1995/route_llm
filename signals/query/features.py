@@ -20,10 +20,13 @@ def parse_prompt(prompt: str) -> tuple[str, list[str]]:
     """Split MC prompt into question stem + option texts; else (full text, [])."""
     opts = [(m.group(1), m.group(2).strip()) for m in _OPTION.finditer(prompt)]
     if not opts:
-        # Strip Hotpot wrapper if present
-        q = prompt
-        if q.startswith("Question:"):
-            q = q[len("Question:") :].strip()
+        marker = "\n\nQuestion:"
+        if prompt.startswith("Question:"):
+            q = prompt[len("Question:") :].strip()
+        elif marker in prompt:
+            q = prompt.rsplit(marker, 1)[1].strip()
+        else:
+            q = prompt
         for suffix in ("\n\nAnswer briefly.", "\nAnswer briefly."):
             if q.endswith(suffix):
                 q = q[: -len(suffix)].strip()

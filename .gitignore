@@ -5,4 +5,7 @@ datasets/processed/
 signals/query/processed/
 signals/query/artifacts/
 signals/query/embeddings/
+signals/query_model/processed/
+signals/query_model/artifacts/
+router/artifacts/
 .env

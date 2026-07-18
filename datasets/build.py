@@ -158,27 +158,61 @@ def build_arc(cfg: dict, seed: int) -> list[dict]:
     return out
 
 
+HOTPOT_INSTRUCTION = "Use the paragraphs below to answer the question with a short phrase."
+HOTPOT_CONTEXT_POLICIES = frozenset({"question_only", "full_context", "gold_only"})
+
+
+def hotpot_paragraph(title: str, sentences: list[str]) -> str:
+    return f"Paragraph: {title}\n" + " ".join(sentences)
+
+
+def hotpot_paragraphs(ex: dict, policy: str) -> list[tuple[str, list[str]]]:
+    titles = list(ex["context"]["title"])
+    sents_list = list(ex["context"]["sentences"])
+    all_paras = list(zip(titles, sents_list))
+    if policy == "full_context":
+        return all_paras
+    if policy == "gold_only":
+        gold_titles = set(ex["supporting_facts"]["title"])
+        return [(t, ss) for t, ss in all_paras if t in gold_titles]
+    if policy == "question_only":
+        return []
+    raise ValueError(f"unsupported context_policy={policy!r}")
+
+
+def hotpot_prompt(ex: dict, policy: str) -> str:
+    if policy not in HOTPOT_CONTEXT_POLICIES:
+        raise ValueError(f"unsupported context_policy={policy!r}")
+    q = ex["question"].strip()
+    if policy == "question_only":
+        return f"Question: {q}\n\nAnswer briefly."
+    lines = [HOTPOT_INSTRUCTION, ""]
+    for title, sentences in hotpot_paragraphs(ex, policy):
+        lines.append(hotpot_paragraph(title, sentences))
+        lines.append("")
+    lines.extend([f"Question: {q}", "", "Answer briefly."])
+    return "\n".join(lines)
+
+
 def build_hotpot(cfg: dict, seed: int) -> list[dict]:
     from datasets import load_dataset
 
     if cfg.get("hf_config", "distractor") != "distractor":
         raise ValueError("only distractor (has gold on validation)")
-    policy = cfg.get("context_policy", "question_only")
+    policy = cfg.get("context_policy", "full_context")
+    if policy not in HOTPOT_CONTEXT_POLICIES:
+        raise ValueError(f"unsupported context_policy={policy!r}")
     roles_cfg = cfg.get("roles", {})
 
     def to_row(ex: dict, role: str, hf_split: str) -> dict:
-        q = ex["question"].strip()
-        if policy == "question_only":
-            prompt = f"Question: {q}\n\nAnswer briefly."
-        else:
-            raise ValueError(f"unsupported context_policy={policy}")
+        paras = hotpot_paragraphs(ex, policy)
         return row(
             source="hotpotqa",
             config="distractor",
             hf_split=hf_split,
             role=role,
             task_type="multi_hop_qa",
-            prompt=prompt,
+            prompt=hotpot_prompt(ex, policy),
             gold=ex["answer"],
             metric="em",
             raw_id=str(ex["id"]),
@@ -187,6 +221,7 @@ def build_hotpot(cfg: dict, seed: int) -> list[dict]:
                 "level": ex.get("level"),
                 "type": ex.get("type"),
                 "context_policy": policy,
+                "n_context_paragraphs": len(paras),
             },
         )
 

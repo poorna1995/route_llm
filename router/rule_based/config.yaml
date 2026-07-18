@@ -1,0 +1,30 @@
+# Rule-based router (thresholds + equal-weight feature sets)
+# λ learning lives in router/learn_weight/ (deferred).
+
+artifacts_dir: router/artifacts/rule_based
+
+# How to pick τ* on calib
+select: cpt80          # cpt50 | cpt80 | max_pgr_at_alpha
+alpha_max: 0.25        # used when select=max_pgr_at_alpha
+
+# Feature sets evaluated (top-k filled after fit rank)
+feature_sets:
+  - S_H
+  - S_p
+  - S_md
+  - S_top2
+  - S_top4
+  - S_top5
+  - S_all
+
+# Orientation: higher score ⇒ escalate to strong
+directions:
+  C_length: +1
+  C_density: +1
+  C_atypical: +1
+  C_linguistic: +1
+  C_query: +1
+  H: +1
+  p_max: -1
+  margin: -1
+  top2_mass: -1

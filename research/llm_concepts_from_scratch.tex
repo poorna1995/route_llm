@@ -1,0 +1,1805 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\layer}[1]{\paragraph{#1.}}
+
+\setlist[itemize]{leftmargin=*}
+\setlist[enumerate]{leftmargin=*}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  frame=single,
+  breaklines=true,
+  columns=fullflexible,
+  aboveskip=0.8em,
+  belowskip=0.8em
+}
+
+\title{Large Language Models --- Concepts From Scratch\\
+\large A detailed phase-by-phase paper for reading and interview prep}
+\author{Narration: Setup $\rightarrow$ Problem $\rightarrow$ Root cause $\rightarrow$ Solution $\rightarrow$ Payoff\\[0.4em]
+Style source:
+\href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{Vizuara --- LLM Interview Series no.~5 (PagedAttention)}\\[0.4em]
+Do not invent benchmarks. Numbers from papers/blogs are labeled as that source's setting.}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This paper walks the LLM stack in order: what an LLM is, mental models, Transformer and attention, pretraining, post-training, RAG versus fine-tuning, then inference systems (KV cache, GQA, FlashAttention, PagedAttention, quantization, speculative decoding).
+Every major idea is told as a story---the naive approach, why it breaks, the root cause, then the method---not as a glossary of acronyms.
+Claims stay with checkable papers, the public vLLM blog, and the cited Vizuara teaching videos.
+Companion lecture notes: \texttt{research/llm/vizuara\_inference\_phase1\_notes.md} and \texttt{research/llm/llm\_end\_to\_end\_survey.md}.
+Markdown twin: \texttt{research/llm\_concepts\_from\_scratch.md}.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\clearpage
+\section{Phase 0 --- The map before the details}
+
+
+Read this once so later sections attach to a spine.
+
+
+\begin{lstlisting}
+World text
+  $\rightarrow$ tokenize into subwords
+  $\rightarrow$ pretrain a decoder-only Transformer (base model = next-token predictor)
+  $\rightarrow$ post-train (SFT $\rightarrow$ preferences / reasoning)
+  $\rightarrow$ product choice: RAG and/or fine-tuning
+  $\rightarrow$ serve autoregressive decode:
+        prefill vs decode
+        $\rightarrow$ KV cache (good compute / evil memory)
+        $\rightarrow$ shrink KV (MQA / GQA / \ldots{})
+        $\rightarrow$ FlashAttention (IO schedule)
+        $\rightarrow$ continuous batching + PagedAttention (multi-tenant memory)
+        $\rightarrow$ quantization $\rightarrow$ speculative decoding
+  $\rightarrow$ evaluate capability + preference + safety + cost
+\end{lstlisting}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Symptom} & \textbf{Likely stage} \\
+\midrule
+Cannot do basics even with good prompts & Pretraining data / capacity \\
+Knows facts, ignores instructions & SFT \\
+Fluent but rude / unsafe / sycophantic & Preference post-training \\
+Chat OK, hard math fails & Reasoning post-training or test-time compute \\
+Correct but too slow / expensive & Inference systems / routing \\
+Leaderboard up, users unhappy & Evaluation mismatch \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 1 --- What an LLM actually is}
+
+
+\subsection{Step 1.1 --- Stop saying ``understands language''}
+
+
+\paragraph{Setup.}
+
+People say ChatGPT ``understands'' Spanish travel plans. Under the hood, the deployed object is a parameterized function: given tokens so far, it outputs a probability distribution over the next token in a fixed vocabulary.
+
+
+\paragraph{Problem.}
+
+Language is open-ended. Hand-written grammar rules and templates do not cover web text, code, dialogue, and instructions at scale.
+
+
+\paragraph{Root cause.}
+
+We need one training objective that (i) uses abundant unlabeled text and (ii) produces a generative system.
+
+
+\subsubsection{Solution --- Autoregressive language modeling}
+
+Factorize a sequence with the chain rule:
+
+
+\[
+P(x_1,\ldots,x_T)=\prod_{t=1}^{T} P(x_t \mid x_{<t}).
+\]
+
+
+Train by minimizing next-token \textbf{cross-entropy} on large corpora. At inference, choose the next token by sampling from that distribution (or taking \(\arg\max\)), append it, and repeat.
+
+
+\paragraph{Payoff.}
+
+One scalable objective can absorb many downstream behaviors as ``continue this prompt usefully.'' This is the standard framing used across GPT-style models.
+
+
+\textbf{Anchors:} Brown et al., GPT-3 (2020); standard LM factorization. We are not claiming a specific chatbot's private training recipe.
+
+
+\subsection{Step 1.2 --- Tokenization (why text is not raw characters)}
+
+
+\paragraph{Setup.}
+
+Neural nets need integer IDs. Text must become a sequence of token IDs.
+
+
+\paragraph{Problem.}
+
+\begin{itemize}
+\item \textbf{Character-level:} sequences become very long $\rightarrow$ attention cost explodes.  
+\item \textbf{Word-level:} vocabulary explodes; rare words, typos, and code break.
+\end{itemize}
+
+
+\paragraph{Root cause.}
+
+We need open vocabulary without pathological sequence length.
+
+
+\paragraph{Solution.}
+
+\textbf{Subword} tokenization. Common in GPT-style models: Byte-Pair Encoding (BPE) / byte-level BPE --- merge frequent symbol pairs into subwords. Other families use WordPiece or Unigram/SentencePiece.
+
+
+\paragraph{Payoff.}
+
+Any Unicode string can be encoded; frequent words stay short; rare pieces split.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 2 --- Mental models you will reuse later}
+
+
+These are not serving kernels. They are shared intuitions under loss, architecture choices, and sampling. Learn them before optimizing decode.
+
+
+\subsection{Step 2.1 --- Entropy (surprise)}
+
+
+\textbf{Video:} \href{https://www.youtube.com/watch?v=q3agYqgqklU}{Entropy: AI Mental Model \#9}   \textbf{Visual notes:} \href{https://vizuaraai.github.io/great-mental-models-of-ai/lecture-09-entropy.html}{lecture-09-entropy.html}
+
+
+\subsubsection{How to explain it (story first --- do not open with \(-\sum p\log p\))}
+
+
+\begin{enumerate}
+\item Everyday disorder (messy room, cream in coffee).  
+\item Formal meaning: \textbf{count of arrangements} that look the same from outside.  
+\item Physics: heat = molecular jiggling $\rightarrow$ more microstates $\rightarrow$ higher entropy; Second Law.  
+\item Boltzmann: \(S = k \log W\).  
+\item Shannon: information = \textbf{surprise} \(=-\log p\); entropy = \textbf{expected surprise}.  
+\item Only then: where LLMs use the same idea.
+\end{enumerate}
+
+
+\textbf{Core reframing:} Entropy is not a vibe of ``messiness.'' Low entropy $\approx$ few arrangements (tidy / peaked / certain). High entropy $\approx$ many arrangements (messy / flat / uncertain).
+
+
+\subsubsection{Shannon side}
+
+
+\paragraph{Setup.}
+
+Shannon (1948) needed to measure how much information a message carries.
+
+
+\paragraph{Problem.}
+
+``The sun rose'' and ``it snowed in the desert'' are not equally informative.
+
+
+\paragraph{Root cause.}
+
+Common events are unsurprising; rare events are surprising.
+
+
+\paragraph{Solution.}
+
+\[
+\text{surprise}(x) = -\log p(x)
+\]
+
+Entropy of a distribution = average surprise. Fair coin $\rightarrow$ high uncertainty. Biased coin $\rightarrow$ lower average surprise.
+
+
+\subsubsection{Where it shows up in LLM land}
+
+
+\textbf{(1) Cross-entropy loss = training surprise.}   If the true next token has model probability \(p_{\text{true}}\):
+
+\[
+\mathcal{L} = -\log p_{\text{true}}.
+\]
+
+Pretraining is largely minimizing this next-token cross-entropy.
+
+
+\textbf{(2) Perplexity.}   Perplexity $\approx$ effective branching factor of the model's uncertainty (teaching English: perplexity 2 $\approx$ coin-flip unsure; perplexity 50 $\approx$ \textasciitilde{}50 doors). Lower perplexity $\Rightarrow$ more confident next-token predictions \textit{on that data}. It is an intrinsic LM metric, not the same as chat quality.
+
+
+\textbf{(3) Sampling temperature.}   Softmax with temperature \(T\): low \(T\) $\rightarrow$ peaked (low entropy, deterministic); high \(T\) $\rightarrow$ flatter (high entropy, more random). The knob is called temperature because it spreads probability mass the way physical temperature spreads molecular arrangements.
+
+
+\textbf{(4) KL divergence = relative entropy.}   Extra surprise from using the wrong distribution. Shows up as the \textbf{KL penalty} in RLHF/PPO that keeps the policy near a reference model.
+
+
+\textbf{Interview one-liner:} Whenever the problem is uncertainty, surprise, confidence, randomness, or distance between beliefs --- reach for entropy. In LLM land: CE trains, perplexity scores uncertainty, temperature spends entropy at decode, KL limits drift in RLHF.
+
+
+\subsection{Step 2.2 --- Expressivity (lift when stuck)}
+
+
+\textbf{Video:} \href{https://www.youtube.com/watch?v=YE0udJCgDqc}{Expressivity: AI Mental Model \#6}
+
+
+\paragraph{Story.}
+
+If patterns cannot be separated in the current representation (classic XOR picture), \textbf{lift} to a richer / higher-dimensional space where they become separable (kernel trick, wider FFN, multi-head perspectives).
+
+
+\paragraph{Warning.}
+
+More expressivity can also fit noise $\rightarrow$ overfitting. In Transformers, the \textbf{FFN} is the per-token ``wide lift''; attention is the inter-token mixer. Do not confuse those jobs.
+
+
+\subsection{Step 2.3 --- Compression (narrow waist)}
+
+
+\textbf{Video:} \href{https://www.youtube.com/watch?v=hGS6RbAYLl0}{Compression: AI Mental Model \#5}
+
+
+\paragraph{Story.}
+
+When something is too big (memory, \(\Delta W\), pixels), find a \textbf{narrow latent}, do the work there, project back --- because the giant object was never as high-dimensional as it looked.
+
+
+\subsubsection{Same gesture in different places}
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{Place} & \textbf{Too big} & \textbf{Waist} \\
+\midrule
+Autoencoder & Input dim & Latent code \\
+LoRA & Full \(\Delta W\) & \(A\,(D\times r)\), \(B\,(r\times D)\), \(r\ll D\) \\
+GQA / MLA-style & Full MHA KV & Shared / latent KV \\
+Embedding stores & Float embeddings & Quantized / compressed vectors \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\textbf{Do not confuse:} GQA changes attention KV layout at architecture/serve time; LoRA compresses fine-tuning updates.
+
+
+\subsection{Step 2.4 --- Diffusion (contrast with autoregressive LLMs)}
+
+
+\textbf{Video:} \href{https://www.youtube.com/watch?v=bTEfdB2D1Ek}{Diffusion: AI Mental Model \#7}
+
+
+\subsubsection{Story (not DDPM jargon first)}
+
+\begin{enumerate}
+\item Creating a masterpiece in one shot is hard.  
+\item Trick: \textbf{learn to destroy gently}, then run destruction backward.  
+\item Forward: add a little noise repeatedly until nearly pure noise (and know what was added).  
+\item Train a network to undo \textbf{one tiny step}.  
+\item Generate: start from pure noise; repeatedly remove predicted noise.
+\end{enumerate}
+
+
+\subsubsection{Contrast with ChatGPT-class inference}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{} & \textbf{Autoregressive LLM} & \textbf{Diffusion-style generator} \\
+\midrule
+Order & Left-to-right, one token at a time & Iterative denoise / unmask; can update many positions \\
+Starts from & Prompt prefix & Noise / mask (formulation-dependent) \\
+Phase-1 tools & KV cache, GQA, PagedAttention, speculation & Different bottleneck story \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\textbf{Do not invent product claims} (``Model X ships diffusion language''). Stick to: AR is dominant for chat APIs; diffusion-for-language is an active alternative paradigm.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 3 --- Transformer architecture (interview depth)}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=c533te7NSpI}{LLM Interview Series \#3}
+
+
+Do \textbf{not} recite ``attention + FFN, done.'' Lead big picture $\rightarrow$ stack $\rightarrow$ one block $\rightarrow$ zoom attention.
+
+
+\subsection{Step 3.1 --- Scope: decoder-only for chat}
+
+
+Original ``Attention Is All You Need'' (Vaswani et al., 2017) had \textbf{encoder + decoder}. Modern chat models are \textbf{decoder-only}: generate the next token left-to-right. Unless asked for machine translation / seq2seq, focus the interview answer on the decoder stack.
+
+
+\subsection{Step 3.2 --- Depth 1: whole LLM = three blocks}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Block} & \textbf{Role} \\
+\midrule
+\textbf{Input} & Tokens $\rightarrow$ token embeddings + positional info $\rightarrow$ input embeddings \\
+\textbf{Processor} & Stacked Transformer blocks (this \textit{is} the architecture) \\
+\textbf{Output} & Hidden state $\rightarrow$ logits over vocabulary $\rightarrow$ next-token choice \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+Place the Transformer in the \textbf{processor}. Ground it with a real prompt path: ``Give me a travel plan for Spain'' $\rightarrow$ embeddings $\rightarrow$ stack $\rightarrow$ logits $\rightarrow$ next token.
+
+
+\textbf{Same diagram, two regimes:}
+
+\begin{itemize}
+\item Pretrain: embeddings / \(W_Q,W_K,W_V\) / FFN weights are \textbf{learned}.  
+\item Inference: those weights are \textbf{fixed}; forward path shape is the same.
+\end{itemize}
+
+
+\subsection{Step 3.3 --- Depth 2: stack many identical blocks}
+
+
+One block's output feeds the next: \(T_1 \to T_2 \to \cdots \to T_L\) (dozens to 100+ layers in large models). Composable stacking is a reason the architecture scaled.
+
+
+Innovations cluster on two modules inside each block:
+
+\begin{itemize}
+\item \textbf{Attention} variants: MQA, GQA, MLA, \ldots{}  
+\item \textbf{FFN} variants: MoE, SwiGLU, \ldots{}
+\end{itemize}
+
+
+\subsection{Step 3.4 --- Depth 3: modules inside one block}
+
+
+Typical decoder block as taught in the lecture (exact norm placement varies --- pre-norm vs post-norm):
+
+
+\begin{enumerate}
+\item LayerNorm (or RMSNorm in many modern models)  
+\item Multi-head attention  
+\item Dropout  
+\item Residual / skip  
+\item LayerNorm / RMSNorm  
+\item Feed-forward network (MLP)  
+\item Dropout  
+\item Residual / skip  
+\end{enumerate}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Module} & \textbf{First-principles job} \\
+\midrule
+Norm (LN / RMSNorm) & Stabilize activations / training \\
+Multi-head attention & \textbf{Only place tokens talk to each other} --- mix into context vectors. Causal mask: no future tokens \\
+Dropout & Training regularization (classic DL) \\
+Residual & Alternate path for gradients $\rightarrow$ fight vanishing gradients in deep stacks \\
+FFN / MLP & \textbf{Per-token} expand (often \textasciitilde{}\(4\times d\)) $\rightarrow$ nonlinearity $\rightarrow$ contract. Tokens do \textbf{not} mix here. Reason: \textbf{expressivity} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\textbf{Critical contrast:} Attention = inter-token communication. FFN = intra-token wide transform. Without attention, ``Harry \ldots{} he'' never binds.
+
+
+\subsection{Step 3.5 --- Depth 4: enough attention for this question}
+
+
+\begin{enumerate}
+\item \(X \rightarrow Q,K,V\) via \(W_Q,W_K,W_V\).  
+\item Scores \(\propto QK\textasciicircum{}\top\); scale by \(\sqrt{d_k}\); causal mask; softmax $\rightarrow$ weights.  
+\item Context \(\propto\) weights \(\times V\).  
+\item Multi-head: split into heads; concat.
+\end{enumerate}
+
+
+Full KV-cache story is Interview \#1; GQA is Interview \#6.
+
+
+\subsection{Step 3.6 --- Modern knobs (flag, don't invent)}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Older textbook} & \textbf{Common modern twist} \\
+\midrule
+Absolute positional embeddings & \textbf{RoPE} inside attention \\
+LayerNorm & \textbf{RMSNorm} \\
+GELU MLP & \textbf{SwiGLU} (gated) \\
+Dense FFN & \textbf{MoE} routing (family-specific) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+Mention as family-specific, not universal law.
+
+
+\subsubsection{60-second script}
+
+``Decoder-only LLM: embeddings in, stacked Transformer blocks, logits out. Each block is norm $\rightarrow$ causal MHA (tokens mix) $\rightarrow$ residual $\rightarrow$ norm $\rightarrow$ wide FFN (per-token expressivity) $\rightarrow$ residual. Attention is the only inter-token path; FFN lifts width then contracts. Variants like GQA/MoE change attention or FFN; serving then caches \(K,V\) at decode.''
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 4 --- Attention in full (conceptual then matrix)}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=cquX2tOODUI}{LLM Interview Series \#4}
+
+
+\subsection{Step 4.1 --- Place it in the bird's-eye view first}
+
+
+Input $\rightarrow$ Processor (attention sits inside each block after the first norm) $\rightarrow$ Output. Only then zoom.
+
+
+\subsection{Step 4.2 --- Conceptual problem attention solves}
+
+
+\paragraph{Setup.}
+
+Language is full of long-range links:
+
+\begin{itemize}
+\item \texttt{Harry boarded the train. \textbf{He} \ldots{}} --- who is \textit{he}?  
+\item \texttt{The dog chased the ball. \textbf{It} could not catch \textbf{it}.} --- first \textit{it}$\rightarrow$dog, second \textit{it}$\rightarrow$ball.  
+\item Code: ``change the first 20 lines'' needs earlier context.
+\end{itemize}
+
+
+\paragraph{Problem.}
+
+If every token were processed in isolation, the model would have \textbf{no clue about its neighbors}. Context would not exist.
+
+
+\paragraph{Root cause.}
+
+Next-token modeling needs \textbf{links} between a token and earlier tokens, plus \textbf{how much} to weight each earlier token.
+
+
+\subsubsection{Solution in words}
+
+Attention captures links: for a given query token, which past keys matter, and with what strength.
+
+
+\textbf{One-liner:} Without attention, tokens are islands; with attention, each token can read a weighted view of its past.
+
+
+\subsection{Step 4.3 --- Matrix mechanism (write on the board)}
+
+
+Input embeddings \(X\) (e.g. 3 tokens $\times$ \(d\)). Trained in pretraining; frozen at inference.
+
+
+\begin{enumerate}
+\item \(Q = X W_Q,\quad K = X W_K,\quad V = X W_V\).  
+\item Scores \(S = Q K\textasciicircum{}\top\). Row \(i\), column \(j\) = how much token \(i\) attends to token \(j\).  
+\item \textbf{Causal mask:} upper triangle blocked --- no future tokens.  
+\item Scale (typically \(/\sqrt{d_k}\)), \textbf{softmax} $\rightarrow$ attention weights.  
+\item Context \(=\) weights \(\times V\) --- each position becomes a \textbf{context vector} mixed from values.
+\end{enumerate}
+
+
+Scores decide \textbf{where} to look; values carry \textbf{what} content is mixed.
+
+
+\subsection{Step 4.4 --- Multi-head}
+
+
+Single-head = one score matrix = one perspective.   Multi-head: multiple projection sets $\rightarrow$ multiple score matrices $\rightarrow$ concat.
+
+
+\textbf{Why:} one sentence can need several bindings at once (\textit{artist painted \ldots{} woman with a brush} --- brush with artist vs brush with woman).
+
+
+\subsubsection{60-second script}
+
+``Attention is how tokens get context: without it they don't know their neighbors. For each position we form Q, K, V; scores are \(QK\textasciicircum{}\top\); causal mask blocks the future; softmax turns scores into weights; weighted values become the context vector. Multi-head repeats that with different projections.''
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 5 --- Pretraining}
+
+
+\subsection{Step 5.1 --- Data}
+
+
+\paragraph{Setup.}
+
+Pretraining is next-token prediction on massive text (web, books, code, \ldots{}).
+
+
+\paragraph{Problem.}
+
+Raw crawls contain spam, boilerplate, duplicates, PII. Duplicates inflate memorization and can contaminate evaluation later.
+
+
+\paragraph{Root cause.}
+
+Gradient updates follow the empirical data distribution. Garbage in $\rightarrow$ capability and safety issues out.
+
+
+\paragraph{Solution.}
+
+Filter, deduplicate, and \textbf{domain-mix} (web + code + books + \ldots{}), as described in modern open recipes (e.g. Llama-family reports). Synthetic rewritten data is sometimes used carefully; overuse risks distribution collapse.
+
+
+\subsection{Step 5.2 --- Scaling laws}
+
+
+\paragraph{Setup.}
+
+Pretraining costs money. Choose model size and number of training tokens under a FLOP budget.
+
+
+\paragraph{Problem.}
+
+``Just make the model bigger'' can waste compute if the model is undertrained on too few tokens (or the reverse).
+
+
+\paragraph{Root cause.}
+
+Loss depends jointly on parameters, data, and compute --- not parameters alone.
+
+
+\paragraph{Solution.}
+
+Empirical scaling laws: Kaplan et al. (2020); Hoffmann et al. / Chinchilla (2022). Chinchilla emphasizes compute-optimal \textbf{tokens-per-parameter}. Fits are empirical; data quality shifts constants. This guides budgets; it does \textbf{not} guarantee every downstream skill scales smoothly.
+
+
+\subsection{Step 5.3 --- What pretraining produces --- and what it does not}
+
+
+After pretraining you have a \textbf{base model}: a strong next-token predictor.
+
+
+It does \textbf{not} reliably:
+
+\begin{itemize}
+\item follow user instructions,  
+\item refuse unsafe asks,  
+\item use a chat format,  
+\item prefer helpful answers among many fluent ones.
+\end{itemize}
+
+
+\textbf{Root cause:} the objective never saw an explicit ``be a helpful assistant'' reward --- only ``predict the next token on internet-like text.''
+
+
+Hand the baton to \textbf{post-training}. Do not expect prompting alone to fully replace missing base competence.
+
+
+\subsection{Step 5.4 --- Training systems (names after the problem)}
+
+
+\paragraph{Setup.}
+
+A frontier run does not fit on one GPU: weights, optimizer states, activations, long sequences.
+
+
+\paragraph{Problem.}
+
+Naive data-parallel replication of full Adam states OOMs; single-device batch is too small.
+
+
+\subsubsection{Solution toolkit (standard, not a new paper claim)}
+
+AdamW + schedules; mixed precision (BF16/FP16/FP8); gradient checkpointing; data / tensor / pipeline parallelism; ZeRO / FSDP; sequence/context parallelism for long context.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 6 --- Post-training}
+
+
+\subsection{Step 6.1 --- Supervised Fine-Tuning (SFT)}
+
+
+\paragraph{Setup.}
+
+You have a base LM. Users want answers to instructions, not random web continuations.
+
+
+\paragraph{Problem.}
+
+Ask a base model a question; it may continue as if writing a webpage, ignore the ask, or produce the wrong format.
+
+
+\paragraph{Root cause.}
+
+Pretraining distribution $\neq$ assistant distribution.
+
+
+\paragraph{Solution.}
+
+Collect \((\mathrm{prompt}, \mathrm{desired\ response})\) demonstrations and fine-tune with ordinary likelihood. This is Step 1 of InstructGPT (Ouyang et al., 2022).
+
+
+\paragraph{Payoff.}
+
+Teaches format, tool schemas, basic instruction following. Still insufficient when many answers are fluent but differently preferred.
+
+
+\subsection{Step 6.2 --- Classic RLHF (do not start with ``PPO'')}
+
+
+\paragraph{Setup.}
+
+After SFT, the model can produce multiple fluent answers. Humans still have preferences: more helpful, less toxic, more truthful.
+
+
+\paragraph{Problem.}
+
+SFT clones demonstrations. It does not directly optimize ``prefer A over B.'' Writing one gold answer for every open-ended prompt is incomplete.
+
+
+\paragraph{Root cause.}
+
+We need a ranking signal, then a way to optimize against it without reward hacking / drift.
+
+
+\subsubsection{Solution --- InstructGPT three steps (Ouyang et al., 2022)}
+
+\begin{enumerate}
+\item \textbf{SFT} on demonstrations.  
+\item \textbf{Reward model (RM):} humans compare outputs; train an RM to predict the preferred one.  
+\item \textbf{PPO:} optimize the policy to increase RM reward, with a \textbf{KL penalty} toward a reference policy (limits over-optimization). The KL is the relative-entropy idea from Phase 2.
+\end{enumerate}
+
+
+\paragraph{Tradeoffs.}
+
+Preference data cost, RM misspecification, reward hacking, multi-model training complexity (policy + value + RM + reference).
+
+
+\textbf{Sources:} Ouyang et al., 2022; OpenAI instruction-following writeup.
+
+
+\subsection{Step 6.3 --- DPO (problem first)}
+
+
+\paragraph{Setup.}
+
+RLHF works, but the stack is heavy: sample $\rightarrow$ RM $\rightarrow$ PPO with value model and KL control.
+
+
+\paragraph{Problem.}
+
+Engineering instability and cost make iteration slow for many labs.
+
+
+\paragraph{Solution.}
+
+\textbf{DPO} (Rafailov et al., 2023): train the policy directly on preference pairs with a classification-style objective that implicitly encodes the reward (under Bradley--Terry + KL-constrained optimal-policy assumptions). Related objectives (IPO, KTO, \ldots{}) exist for different data/failure modes --- name them only after stating which pain point they target.
+
+
+\subsection{Step 6.4 --- Reasoning post-training (high level, no invented scores)}
+
+
+Chat alignment $\neq$ contest math / coding reliability.
+
+
+Families (keep claims checkable):
+
+\begin{itemize}
+\item \textbf{ORM} --- score final answer when a verifier exists.  
+\item \textbf{PRM} --- score steps (denser credit).  
+\item \textbf{RL with verifiable rewards} --- unit tests / exact checkers.  
+\item \textbf{GRPO} (DeepSeekMath; used in DeepSeek-R1 line): group of outputs per prompt; group-normalized rewards as advantages; no separate value network.
+\end{itemize}
+
+
+Do \textbf{not} invent score tables.
+
+
+\subsection{Step 6.5 --- Parameter-efficient fine-tuning}
+
+
+Full copies of weights per task are impractical. Task updates are often low-rank relative to full \(W\). \textbf{LoRA} / \textbf{QLoRA} / adapters store small \(A,B\) instead. Fine-tune on smaller GPUs; serve multiple adapters on one base.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 7 --- RAG vs fine-tuning (application design)}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=cCXjumE70-g}{LLM Interview Series \#8}
+
+
+This is a \textbf{system-design} question. Interviewers test whether you can choose an approach for a vague industry request --- not recite two definitions.
+
+
+\subsection{Step 7.1 --- The interview trap}
+
+
+You may know RAG and fine-tuning in isolation. The hard part is connecting them: \textit{for this product, which one (or both), and why?}
+
+
+Vague client: ``Build a chatbot for our domain.''   Strong answer: clarify \textbf{grounded lookup} of owned documents vs \textbf{new behavior / style / pattern} that is not literally a passage to retrieve.
+
+
+\subsection{Step 7.2 --- What problem does RAG solve? (before the acronym)}
+
+
+\paragraph{Setup.}
+
+A nutrition / fitness company has \textasciitilde{}2,000 curated resources (their IP). Customers ask ``what should I eat for breakfast?'' Answers must be \textbf{grounded} in those resources --- not a generic web opinion.
+
+
+\subsubsection{Naive solution}
+
+Stuff \textbf{all} resources into the prompt every turn.
+
+
+\paragraph{Problem.}
+
+Corpus can be huge (teaching order-of-magnitude in the video: tens--hundreds of millions of tokens). Context windows are large but still limited (example contrast used in teaching: \textasciitilde{}1M $\ll$ 100M). You cannot fit the whole library.
+
+
+\paragraph{Root cause.}
+
+Context is a scarce resource (``like land''). Only a \textbf{slice} of the corpus is relevant per question.
+
+
+\subsubsection{Solution --- Retrieval-Augmented Generation (Lewis et al., 2020)}
+
+\begin{enumerate}
+\item Chunk the corpus (paragraphs / sections --- a design choice).  
+\item Embed chunks $\rightarrow$ vectors; embed the query.  
+\item Retrieve top-\(k\) chunks by similarity (e.g. nearest neighbors / dot product).  
+\item Put \textbf{query + retrieved chunks} into the LLM context; generate.
+\end{enumerate}
+
+
+Weights stay \textbf{fixed}. Name: \textbf{retrieval} augments \textbf{generation}.
+
+
+\textbf{Production caveat from the teaching video:} embedding and storing vectors is expensive; stores often use quantization/compression. ``Vectorless RAG'' (tree-style) is mentioned as a fork --- do not invent details unless asked.
+
+
+\textbf{Analogy:} open-book exam --- flip to relevant pages; book stays beside you.
+
+
+\textbf{When you do not need RAG:} if owned knowledge fits in context with margin, pass it directly.
+
+
+\subsection{Step 7.3 --- What is fine-tuning? (start from pretraining)}
+
+
+\paragraph{Setup.}
+
+A pretrained LM is billions of ``knobs'' fitted on internet-scale data. A raw pretrained checkpoint is often weak at following instructions (``convert 35 km to meters'').
+
+
+\paragraph{Problem.}
+
+You need narrower behavior (instructions, domain style, persona) without full pretraining again.
+
+
+\paragraph{Solution.}
+
+Curate a much smaller supervised set of (question, answer) pairs (teaching ballpark: order of \textasciitilde{}10k, not pretraining scale). Train again so weights \textbf{nudge}. That is fine-tuning.
+
+
+\textbf{Key contrast:} fine-tuning \textbf{changes weights}; RAG does \textbf{not}.
+
+
+\textbf{Pointer only:} the video links ``why small data works'' to intrinsic dimensionality of a pretrained model --- say ``small supervised nudge on a strong pretrained base,'' not a fake theorem.
+
+
+\subsection{Step 7.4 --- Decision examples}
+
+
+\subsubsection{Example A --- Digital clone $\rightarrow$ fine-tuning}
+
+User dumps LinkedIn / YouTube / Instagram. You want a chatbot that \textbf{sounds like them} on \textit{new} questions not literally in the posts.
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Approach} & \textbf{What happens} \\
+\midrule
+RAG & Retrieves relevant posts; does \textbf{not} teach speaking patterns for novel asks \\
+Fine-tuning & Adjusts weights so patterns of speech are internalized \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\subsubsection{Example B --- Pharma / nutrition grounded bot $\rightarrow$ start with RAG}
+
+Answers must stay inside owned documents. Start with RAG: faster, cheaper, simpler. Caveat: RAG surfaces what's (near) in the store; it does not discover deep new patterns.
+
+
+\subsubsection{Escalation}
+
+\begin{lstlisting}
+easiest $\rightarrow$ harder
+RAG  $\rightarrow$  fine-tune pretrained model  $\rightarrow$  train SLM from scratch (pretrain)
+\end{lstlisting}
+
+
+\subsection{Step 7.5 --- Comparison table (draw this)}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{Axis} & \textbf{RAG} & \textbf{Fine-tuning} \\
+\midrule
+Finds patterns in data? & No --- retrieves existing text & Yes --- weights encode patterns \\
+Cost & Lower & Higher \\
+Simplicity & Higher & Lower \\
+Personalization & Weak & Strong when trained for it \\
+Analogy & Open-book exam & Study the night before (no book in the room) \\
+Weights at serve & Unchanged & Changed (or LoRA/adapters) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+Freshness: RAG wins when knowledge updates often (re-index). Many real systems do \textbf{both} --- say that \textit{after} the primary axes.
+
+
+\subsubsection{60-second script}
+
+``RAG and fine-tuning solve different failures. If a company's library won't fit in context, RAG retrieves relevant chunks and grounds the answer --- open-book; weights stay fixed. Fine-tuning nudges weights on a small labeled set so behavior or patterns change --- studying the night before. Grounded nutrition/pharma bot: start RAG. Digital clone on novel questions: fine-tune. Compare patterns, cost, simplicity, personalization; escalate RAG $\rightarrow$ FT $\rightarrow$ pretrain only as needed.''
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 8 --- Inference engineering begins}
+
+
+\textbf{Course framing:} \href{https://inference.vizuara.ai/}{inference.vizuara.ai}
+
+
+\paragraph{Setup.}
+
+Training builds weights. Users experience \textbf{serving}: tokens out per second, dollars per million tokens, GPU OOMs at 2 a.m.
+
+
+\paragraph{Problem.}
+
+A notebook \texttt{model.generate()} that feels fine for one prompt collapses under concurrent users, long contexts, and cost caps.
+
+
+\paragraph{Root cause.}
+
+Inference is autoregressive, often memory-bandwidth heavy, and multi-tenant. Training tricks do not automatically solve decode.
+
+
+\paragraph{Discipline.}
+
+Treat inference as its own stack: hardware $\rightarrow$ kernels $\rightarrow$ attention/KV design $\rightarrow$ scheduler $\rightarrow$ quantization $\rightarrow$ speculation.
+
+
+\paragraph{Hardware lab mindset.}
+
+The same 7B weights bottleneck differently on a laptop, Raspberry Pi, phone, or datacenter GPU. Measure tok/s, VRAM/RSS, quality per device. Do not quote an A100 blog post as universal truth.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 9 --- Prefill vs decode, latency, memory, roofline}
+
+
+\subsection{Step 9.1 --- Prefill vs decode (must name this split)}
+
+
+Example: prompt \texttt{A sunset is} $\rightarrow$ model continues \texttt{extremely beautiful\ldots{}}
+
+
+\begin{enumerate}
+\item \textbf{Prefill:} consume \textbf{all} prompt tokens (largely in parallel), run attention, emit the \textbf{first} output token. Often more compute-bound.  
+\item \textbf{Decode:} emit \textbf{one new token at a time} until stop. This is where naive recompute hurts.
+\end{enumerate}
+
+
+Until first token $\rightarrow$ prefill; after that $\rightarrow$ decode. Every later optimization attaches to this split.
+
+
+\textbf{Root cause of the split:} autoregressive factorization \(P(x_t\mid x_{<t})\) forces sequential new tokens even when the prompt can be processed in parallel.
+
+
+\subsection{Step 9.2 --- Latency vs throughput}
+
+
+\begin{itemize}
+\item \textbf{Latency:} TTFT (time to first token), TPOT (time per output token) for \textit{one} user.  
+\item \textbf{Throughput:} tokens/sec or requests/sec across \textit{many} users.
+\end{itemize}
+
+
+GPUs want large batches; users want snappy single-stream decode. Continuous batching (Phase 13) trades them consciously.
+
+
+\subsection{Step 9.3 --- Memory bill of materials}
+
+
+During inference, GPU/host memory typically holds:
+
+\begin{enumerate}
+\item \textbf{Weights}  
+\item \textbf{Activations} (short-lived)  
+\item \textbf{KV cache} (grows with sequence $\times$ layers $\times$ KV layout)
+\end{enumerate}
+
+
+At long context / high concurrency, \textbf{KV often dominates} and OOMs first.
+
+
+\subsection{Step 9.4 --- Roofline intuition}
+
+
+\paragraph{Setup.}
+
+Every kernel needs FLOPs and bytes from HBM.
+
+
+\paragraph{Problem.}
+
+You ``optimize FLOPs'' but wall-clock does not move.
+
+
+\paragraph{Root cause.}
+
+Decode is often \textbf{memory-bandwidth bound} (reload weights + KV each step), not FLOP-bound.
+
+
+\subsubsection{Solution direction}
+
+Quantization, GQA/MQA, FlashAttention IO patterns, speculation --- attack \textbf{bytes moved} or \textbf{steps taken}.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 10 --- KV cache (full interview walkthrough)}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=CxRGWfcGVbs}{LLM Interview Series \#1}
+
+
+Do \textbf{not} open with ``KV cache makes generation faster.'' Construct from first principles.
+
+
+\subsection{Step 10.1 --- It is an inference concept}
+
+Shows up at serve / generate time. Weights \(W_Q,W_K,W_V\) are already fixed.
+
+
+\subsection{Step 10.2 --- Prefill at matrix level}
+
+Input embeddings \(X\) multiply fixed \(W_Q,W_K,W_V\) $\rightarrow$ \(Q,K,V\).   Scores \(\propto QK\textasciicircum{}\top\) (scale / softmax / causal) $\rightarrow$ weights. Context \(\propto\) weights \(\times V\). Last position $\rightarrow$ logits $\rightarrow$ first generated token.
+
+
+\textbf{At end of prefill:} you already computed \(K\) and \(V\) rows for every prompt token. \textbf{Cache them.}
+
+
+\subsection{Step 10.3 --- Naive decode (the wrong picture)}
+
+To generate the next token, a naive approach recomputes \(Q,K,V\) for the \textbf{entire} sequence every step, full score matrix, full context matrix --- then keeps only the last row.
+
+
+That recomputes past tokens' \(K,V\) that \textbf{cannot change} (same tokens, frozen weights).
+
+
+\subsection{Step 10.4 --- Two realizations that define KV cache}
+
+
+\textbf{Realization A.} Only the latest context vector is needed for the next token --- not a full context matrix of all positions for the logits step.
+
+
+\textbf{Realization B.} That latest context still needs \textbf{full} past \(K\) and \textbf{full} past \(V\). The new query attends over all past keys; the weighted sum uses all past values.
+
+
+So you need the whole \(K,V\) history --- but you must not \textbf{recompute} it.
+
+
+\subsection{Step 10.5 --- Actual decode with cache}
+
+\begin{enumerate}
+\item Embed \textbf{only the new token} (\(1 \times d\)).  
+\item Compute only that token's \(q_{\text{new}}, k_{\text{new}}, v_{\text{new}}\).  
+\item \textbf{Append} \(k_{\text{new}}, v_{\text{new}}\) to cached \(K,V\).  
+\item Use \(q_{\text{new}}\) against full \(K\textasciicircum{}\top\) $\rightarrow$ scores for this step only (\(1 \times\) seq).  
+\item Mix with full \(V\) $\rightarrow$ one context vector $\rightarrow$ logits $\rightarrow$ next token.  
+\item Repeat; cache grows by one \(K,V\) row per new token (per layer / head layout).
+\end{enumerate}
+
+
+\subsection{Step 10.6 --- Why not a Q cache?}
+
+You need full \(K\), full \(V\), but \textbf{only} \(q\) for the \textbf{new} token. Past queries are not reused for the next step's scores. Hence \textbf{KV} cache, not QKV cache.
+
+
+\subsection{Step 10.7 --- Payoff vs evil}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Good} & \textbf{Evil} \\
+\midrule
+Avoids redundant matmuls; compute closer to \textbf{linear} in new tokens vs \textbf{quadratic} recompute of the past & Memory grows with sequence $\times$ layers $\times$ KV heads $\times$ dim $\times$ 2 \\
+Better interactive latency & Moving KV from HBM each step $\rightarrow$ bandwidth bottleneck $\rightarrow$ GQA, PagedAttention, quant \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+KV size scales roughly with:
+\texttt{layers $\times$ kv\_heads $\times$ head\_dim $\times$ sequence\_length $\times$ bytes\_per\_element $\times$ 2}
+(Exact formula depends on GQA/MQA and layout.)
+
+
+\subsection{Step 10.8 --- Unknown output length (bridge)}
+
+You do not know final decode length when the request arrives. Contiguous over-reservation $\rightarrow$ fragmentation $\rightarrow$ \textbf{PagedAttention} (Phase 12).
+
+
+\subsubsection{Related names (state the problem first)}
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{Idea} & \textbf{Problem} & \textbf{One line} \\
+\midrule
+Prefix / prompt caching & Repeated system prompts & Reuse KV for shared prefixes \\
+Chunked prefill & Huge prefills block the GPU & Split prefill; interleave with decode \\
+Eviction / compression (H2O, StreamingLLM, \ldots{}) & Infinite context, finite VRAM & Drop/compress less useful KV (method-specific) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\subsubsection{60-second script}
+
+\begin{enumerate}
+\item Inference-only; prefill vs decode.  
+\item Prefill builds \(Q,K,V\); \textbf{store \(K,V\)}.  
+\item Next token needs latest context $\Rightarrow$ full \(K,V\) + new \(q\) only.  
+\item Don't recompute past \(K,V\); append new \(k,v\).  
+\item No Q-cache.  
+\item Speeds decode; costs memory/bandwidth.
+\end{enumerate}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 11 --- Shrink the KV: MHA $\rightarrow$ MQA $\rightarrow$ GQA}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=mtsY7JsGQjw}{LLM Interview Series \#6}
+
+
+Shared setup: at decode, loading \(K,V\) from the cache is a major \textbf{HBM $\rightarrow$ compute} bandwidth cost.
+
+
+\subsection{Step 11.1 --- Place attention, then multi-head}
+
+LM = input $\rightarrow$ stacked Transformer blocks $\rightarrow$ logits. Inside a block: norm $\rightarrow$ \textbf{MHA} $\rightarrow$ residual $\rightarrow$ norm $\rightarrow$ FFN $\rightarrow$ residual.
+
+
+Multi-head exists for \textbf{perspectives} (ambiguous attachment: brush with artist vs woman). Paper for MHA: Vaswani et al., 2017.
+
+
+\subsection{Step 11.2 --- The need for GQA starts in the KV cache}
+
+In MHA with \(h\) heads, decode stores per-head keys and values. \textbf{KV cache size scales with the number of KV heads.} Larger KV $\Rightarrow$ more bytes moved each decode step.
+
+
+Innovation need: \textbf{shrink KV without throwing away too much quality.}
+
+
+\subsection{Step 11.3 --- MQA (Shazeer, 2019) --- extreme fix}
+
+Keep different queries per head, but force \textbf{one shared K and one shared V} across all heads.
+
+
+\textbf{Store:} only one \(K\) and one \(V\) (not \(h\) of each) $\rightarrow$ large memory cut in the counting argument (up to \textasciitilde{}\(h\times\)).
+
+
+\textbf{Why quality suffers:} heads diversify attention scores. If all heads share the same \(K\) (and \(V\)), diversity comes only from different \(Q\)s $\rightarrow$ weaker multi-perspective modeling. Teaching frame: MQA = low KV (good) + weaker language pattern capture (bad).
+
+
+\subsection{Step 11.4 --- GQA (Ainslie et al., EMNLP 2023) --- middle}
+
+Partition query heads into \(g\) groups. \textbf{Within a group}, share K and V. \textbf{Across groups}, K/V differ.
+
+
+Toy with 4 query heads and 2 groups:
+
+\begin{itemize}
+\item Group 1: \(K_1=K_2\), \(V_1=V_2\)  
+\item Group 2: \(K_3=K_4\), \(V_3=V_4\)  
+\item But \(K_1 \neq K_3\)
+\end{itemize}
+
+
+Endpoints: \(g=h\) $\rightarrow$ MHA; \(g=1\) $\rightarrow$ MQA.
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{} & \textbf{KV memory} & \textbf{Multi-perspective quality} \\
+\midrule
+\textbf{MHA} & Highest & Highest \\
+\textbf{GQA} & Middle & Middle \\
+\textbf{MQA} & Lowest & Lowest (often too weak) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+Teaching practical claim: production open models rarely ship pure MQA; \textbf{GQA is the common compromise} (e.g. Llama family uses GQA; number of groups is a hyperparameter --- verify per model card, don't invent).
+
+
+Honest drawback: GQA is middle for everything. MLA-style latent attention is a \textbf{different} mechanism --- do not equate it with GQA.
+
+
+\subsubsection{60-second script}
+
+Locate MHA $\rightarrow$ multiple heads for perspectives $\rightarrow$ MHA KV $\propto$ heads hurts decode $\rightarrow$ MQA shares one KV (extreme) $\rightarrow$ GQA shares KV per group (middle) $\rightarrow$ draw the spectrum.
+
+
+\subsection{Step 11.5 --- Other long-context families (brief)}
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YYY@{}}
+\toprule
+\textbf{Family} & \textbf{Problem} & \textbf{Idea} \\
+\midrule
+Sliding window & Full \(n\textasciicircum{}2\) too costly & Attend inside a window \\
+Sparse attention & Dense all-pairs wasteful & Structured sparsity \\
+SSM / Mamba (Gu \& Dao et al., 2023) & Want better asymptotic cost & Selective state that summarizes the past \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 12 --- FlashAttention (IO schedule, not new math)}
+
+
+\subsubsection{Shared problem}
+
+Standard attention materializes large \(S=QK\textasciicircum{}\top\) (and softmax) in HBM. Memory traffic dominates even when FLOPs look fine. Root cause: GPU \textbf{HBM $\leftrightarrow$ SRAM} IO.
+
+
+\subsubsection{FlashAttention-1 (Dao et al., NeurIPS 2022)}
+
+\begin{itemize}
+\item Tiling: bring blocks of \(Q,K,V\) into SRAM.  
+\item \textbf{Online softmax} so you never need the full score matrix in HBM.  
+\item Recomputation in backward (training) to save memory.  
+\item \textbf{Exact} attention (same math result, different IO schedule).
+\end{itemize}
+
+
+\subsubsection{FlashAttention-2}
+
+Better work partitioning / parallelism; higher utilization; MQA/GQA support called out in FA2 materials. Reported \textasciitilde{}2$\times$ over FA1 in \textit{their} settings (hardware/workload dependent).
+
+
+\subsubsection{FlashAttention-3 (Dao et al., NeurIPS 2024)}
+
+Targets Hopper (H100) asynchrony (Tensor Cores + TMA): warp specialization, interleave matmul and softmax, FP8 path. Paper reports \textasciitilde{}1.5--2.0$\times$ vs FA2 on H100 in BF16/FP16 regimes --- \textbf{on that hardware/paper setting}.
+
+
+\textbf{Interview line:} FlashAttention does not change mathematical attention; it changes the \textbf{IO schedule} so GPUs stop drowning in HBM traffic.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 13 --- Serving: continuous batching and PagedAttention}
+
+
+\textbf{Teaching video:} \href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{LLM Interview Series \#5}   \textbf{Paper/blog:} Kwon et al., SOSP 2023; \href{https://vllm.ai/blog/2023-06-20-vllm}{vLLM blog}
+
+
+\subsection{Step 13.1 --- Why a serving engine $\neq$ \texttt{transformers.generate}}
+
+HF generate is fine for demos. Multi-tenant production needs a scheduler, memory manager, and batching policy.
+
+
+\subsection{Step 13.2 --- Continuous batching}
+
+
+\paragraph{Setup.}
+
+Requests arrive and finish at different times.
+
+
+\paragraph{Problem.}
+
+Static batching leaves GPU lanes idle when short sequences finish.
+
+
+\paragraph{Solution.}
+
+Dynamically add/remove sequences each iteration (iteration-level scheduling; Orca/vLLM lineage).
+
+
+\subsection{Step 13.3 --- PagedAttention --- full layers (interview gold path)}
+
+
+\subsubsection{Layer 1 --- Basics: GPU memory during inference}
+
+\begin{enumerate}
+\item Model weights (fixed after training)  
+\item Activations (ephemeral)  
+\item KV cache (grows; major during serving)
+\end{enumerate}
+
+
+\subsubsection{Layer 2 --- Problem: traditional KV allocation wastes memory}
+
+You do \textbf{not} know final decode length in advance. Naive approach: reserve a \textbf{contiguous} KV slab per request up to \texttt{max\_tokens}.
+
+
+Failures:
+
+\begin{itemize}
+\item \textbf{Reserved but unused} memory while a request is still generating (cannot give that RAM to another user).  
+\item After a short request finishes early, free holes may be \textbf{too small / wrongly placed} for a waiting large request (\textbf{fragmentation}).
+\end{itemize}
+
+
+Result: low effective batch size $\rightarrow$ poor GPU utilization $\rightarrow$ low throughput.
+
+
+vLLM authors report existing systems can waste a large fraction of KV memory via fragmentation and over-reservation (blog: on the order of \textbf{60--80%} waste in the regimes they studied). Treat as \textbf{their characterization}, not a universal constant.
+
+
+\subsubsection{Layer 3 --- Root cause}
+
+KV for a request is treated like one contiguous physical allocation. Variable lengths + contiguous reservation $\Rightarrow$ fragmentation.
+
+
+\subsubsection{Layer 4 --- Solution: PagedAttention (+ vLLM)}
+
+Inspired by OS \textbf{virtual memory / paging}:
+
+
+\begin{enumerate}
+\item Split KV memory into fixed-size \textbf{blocks} (pages). Block size is a system parameter (often discussed as \textbf{16 tokens} per block in vLLM materials).  
+\item Each block stores K/V for that many tokens.  
+\item Maintain a \textbf{free block list} and a \textbf{block table} mapping each request's logical token spans $\rightarrow$ physical blocks.  
+\item Allocate blocks \textbf{on demand} as decode proceeds; a request's blocks need \textbf{not} be contiguous.  
+\item Attention kernel gathers K/V by following the block table (\textbf{PagedAttention}).
+\end{enumerate}
+
+
+Additional capability from the same abstraction (\href{https://vllm.ai/blog/2023-06-20-vllm}{vLLM blog}): share blocks across sequences (e.g. parallel samples from one prompt) with reference counting / copy-on-write.
+
+
+\subsubsection{Layer 5 --- Payoff}
+
+Near-zero waste except partial last block (blog: under \textasciitilde{}\textbf{4%} waste in their characterization) $\rightarrow$ larger batches $\rightarrow$ higher throughput. Paper/blog report large gains vs prior systems \textbf{in their benchmarks}. \textbf{Do not treat a single speedup number as universal.}
+
+
+\subsubsection{One engine step (mental model)}
+
+Schedule requests $\rightarrow$ allocate/free KV blocks $\rightarrow$ run forward (prefill and/or decode) $\rightarrow$ sample $\rightarrow$ update caches / finish requests.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 14 --- Quantization}
+
+
+\paragraph{Setup.}
+
+Decode is often memory-bandwidth bound; weights + KV compete for VRAM.
+
+
+\paragraph{Problem.}
+
+FP16/BF16 models may not fit, or bandwidth dominates latency.
+
+
+\subsubsection{Solution family (separate the names)}
+
+\begin{itemize}
+\item Precision ladder: FP16/BF16 $\rightarrow$ INT8 $\rightarrow$ INT4 (and related formats).  
+\item Post-training methods: GPTQ, AWQ, GGUF ecosystems --- different recipes for \textit{which} tensors and \textit{how} calibrated.  
+\item Can target weights, and sometimes KV/activations depending on the stack.
+\end{itemize}
+
+
+\paragraph{Interview discipline.}
+
+Always say \textbf{which tensors}, \textbf{which bitwidth}, and \textbf{what quality/latency you measured}. Never claim ``INT4 is always better.''
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 15 --- Speculative decoding}
+
+
+\paragraph{Setup.}
+
+Target-model decode is serial: one (or few) tokens per expensive forward.
+
+
+\paragraph{Problem.}
+
+Latency wall from sequential target steps.
+
+
+\subsubsection{Solution --- draft--verify (Leviathan et al., 2023)}
+
+A cheaper \textbf{draft} proposes several tokens; the \textbf{target} verifies them in parallel and accepts a prefix consistent with the target distribution (exact algorithms preserve the target's distribution when done correctly).
+
+
+\subsubsection{Payoff / tradeoff}
+
+Speedup depends on \textbf{acceptance rate}. Variants: small draft model, Medusa-style heads, EAGLE / EAGLE-3, MTP objectives. Name one method and its tradeoff; do not invent acceptance numbers.
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 16 --- Sampling and frozen-weight procedures}
+
+
+\textbf{Sampling:} temperature, top-\(k\), nucleus / top-\(p\) (Holtzman et al.), beam search. Changes behavior without retraining.
+
+
+\textbf{With frozen weights:} few-shot / ICL (Brown et al., 2020); Chain-of-Thought (Wei et al., 2022); self-consistency (Wang et al., 2022); ReAct / tools; RAG (Phase 7); test-time compute (more samples / search / ``thinking'' tokens on hard items).
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 17 --- Evaluation (brief but honest)}
+
+
+\paragraph{Problem.}
+
+A single leaderboard number can rise while users get worse or unsafe answers.
+
+
+\paragraph{Root cause.}
+
+Benchmarks measure narrow operationalized skills. Proxies can be gamed; contamination inflates scores; LLM-as-judge has biases.
+
+
+\paragraph{Practice.}
+
+Portfolio: capability suites, instruction rubrics, human preference (arena-style Elo), safety, \textbf{plus cost/latency}. Report threats honestly.
+
+
+Routing systems (optional): report quality \textbf{and} cost (strong-call fraction, PGR) --- RouteLLM (Ong et al., ICLR 2025), Hybrid LLM (Ding et al., 2024).
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 18 --- End-to-end in one breath}
+
+
+\begin{lstlisting}
+Text in the world
+  $\rightarrow$ filter / dedup / mix + tokenize
+  $\rightarrow$ pretrain next-token Transformer (+ distributed training)
+  $\rightarrow$ base model
+  $\rightarrow$ SFT $\rightarrow$ preferences (RLHF or DPO/\ldots{}) / reasoning RL
+  $\rightarrow$ product: RAG and/or fine-tune
+  $\rightarrow$ serve: prefill/decode, KV cache, GQA, FlashAttention,
+           continuous batching + PagedAttention, quant, speculation
+  $\rightarrow$ optional tools / test-time compute / routing
+  $\rightarrow$ evaluate $\rightarrow$ iterate
+\end{lstlisting}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 19 --- Explicit non-claims}
+
+
+\begin{itemize}
+\item No claim that one alignment method is universally best.  
+\item No fabricated benchmarks or universal speedups.  
+\item Preference alignment does not ``solve'' safety.  
+\item Agents = orchestration + tools + memory \textbf{on top of} this stack.  
+\item Hardware and traffic change which optimization wins --- measure.
+\end{itemize}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 20 --- Landmark sources (only these; do not invent)}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{Topic} & \textbf{Anchor} \\
+\midrule
+Transformer & Vaswani et al., 2017 \\
+GPT-3 / few-shot & Brown et al., 2020 \\
+Scaling & Kaplan et al., 2020; Hoffmann et al., 2022 \\
+InstructGPT / RLHF & Ouyang et al., 2022 \\
+DPO & Rafailov et al., 2023 \\
+RAG & Lewis et al., 2020 \\
+CoT / self-consistency & Wei et al., 2022; Wang et al., 2022 \\
+Nucleus sampling & Holtzman et al. \\
+MQA & Shazeer, 2019 \\
+GQA & Ainslie et al., EMNLP 2023 \\
+FlashAttention & Dao et al., 2022; FA3 NeurIPS 2024 \\
+PagedAttention / vLLM & Kwon et al., SOSP 2023; vLLM blog 2023 \\
+Speculative decoding & Leviathan et al., 2023 \\
+Mamba & Gu \& Dao et al., 2023 \\
+GRPO / R1 line & DeepSeekMath 2024; DeepSeek-R1 2025 \\
+RouteLLM & Ong et al., ICLR 2025 \\
+Teaching & Vizuara Interview \#1 KV, \#3 Transformer, \#4 Attention, \#5 PagedAttention, \#6 GQA, \#8 RAG vs FT; Mental Models \#5--\#7, \#9 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\bigskip
+
+
+\clearpage
+\section{Phase 21 --- Interview questions (with full answer skeletons)}
+
+
+Speak \textbf{setup $\rightarrow$ problem $\rightarrow$ root cause $\rightarrow$ solution $\rightarrow$ payoff}. Prefer an example you thought through.
+
+
+\subsection{Foundations}
+
+
+\textbf{Q1. What is an LLM, really?}   Parameterized next-token model via \(P(x_t\mid x_{<t})\); train with CE; generate by sampling. Not a separate ``understanding'' module. (Brown et al. / standard LM.)
+
+
+\textbf{Q2. Why Transformers instead of RNNs?}   Need parallel training and long-range mixing at scale; self-attention + FFN + causal mask. (Vaswani 2017.)
+
+
+\textbf{Q3. Explain the Transformer for a chat model.}   Use Phase 3 script: three blocks $\rightarrow$ eight modules with \textit{why} $\rightarrow$ QKV zoom $\rightarrow$ variants live in attention/FFN. (\href{https://www.youtube.com/watch?v=c533te7NSpI}{Video \#3})
+
+
+\textbf{Q4. What is attention?}   Use Phase 4 script: islands $\rightarrow$ Harry/he $\rightarrow$ QKV $\rightarrow$ causal $\rightarrow$ multi-head. (\href{https://www.youtube.com/watch?v=cquX2tOODUI}{Video \#4})
+
+
+\textbf{Q5. What is entropy in LLMs?}   Expected surprise; CE trains; perplexity scores; temperature spends; KL limits RLHF drift. (\href{https://www.youtube.com/watch?v=q3agYqgqklU}{Video Mental Model \#9})
+
+
+\textbf{Q6. Expressivity vs compression?}   Expressivity: lift when stuck (watch overfit). Compression: narrow waist, work small, project up.
+
+
+\subsection{Pretraining / post-training}
+
+
+\textbf{Q7. What does pretraining give / miss?}   Strong base next-token predictor; misses reliable instructions/preferences $\rightarrow$ post-training.
+
+
+\textbf{Q8. What is SFT?}   Supervised \((\mathrm{prompt},\mathrm{response})\) fine-tune; InstructGPT step 1. (Ouyang 2022.)
+
+
+\textbf{Q9. Explain RLHF without starting at PPO.}   Many fluent answers $\rightarrow$ preference signal $\rightarrow$ RM $\rightarrow$ optimize policy with KL to reference. Tradeoffs: cost, hacking, complexity.
+
+
+\textbf{Q10. What problem does DPO solve?}   Heavy RM+PPO loop; train policy on preference pairs directly. (Rafailov 2023.)
+
+
+\textbf{Q11. What is LoRA?}   Task updates often low-rank; store \(A,B\) with \(r\ll d\); cheaper multi-task fine-tunes.
+
+
+\subsection{RAG vs fine-tuning}
+
+
+\textbf{Q12. RAG vs fine-tuning --- when which?}   Use Phase 7 full story + table + escalation. (\href{https://www.youtube.com/watch?v=cCXjumE70-g}{Video \#8})
+
+
+\textbf{Q13. Can you use both?}   Yes: FT for behavior/format; RAG for grounded facts --- after primary axes.
+
+
+\subsection{Inference core}
+
+
+\textbf{Q14. Prefill vs decode?}   Prefill = parallel over prompt, first token; decode = sequential; different bottlenecks.
+
+
+\textbf{Q15. What is the KV cache? Why not cache Q?}   Use Phase 10 full walkthrough. (\href{https://www.youtube.com/watch?v=CxRGWfcGVbs}{Video \#1})
+
+
+\textbf{Q16. Latency vs throughput?}   Name the product goal; continuous batching trades them.
+
+
+\textbf{Q17. Why is decode often memory-bound?}   Each step reloads weights (+KV) from HBM for little new compute.
+
+
+\subsection{Attention variants / kernels}
+
+
+\textbf{Q18. MHA vs MQA vs GQA?}   Use Phase 11 spectrum story. (Ainslie 2023; \href{https://www.youtube.com/watch?v=mtsY7JsGQjw}{Video \#6})
+
+
+\textbf{Q19. What is FlashAttention?}   Same math; IO-aware tiling + online softmax. (Dao et al.)
+
+
+\subsection{Serving}
+
+
+\textbf{Q20. What is PagedAttention?}   Use Phase 13 five layers exactly. (\href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{Video \#5}; Kwon/vLLM)
+
+
+\textbf{Q21. Continuous batching?}   Sequences finish at different times; dynamically admit/finish.
+
+
+\textbf{Q22. Walk one vLLM-style engine step.}   Schedule $\rightarrow$ allocate/free KV blocks $\rightarrow$ forward $\rightarrow$ sample $\rightarrow$ update.
+
+
+\subsection{Quant / speculation / design}
+
+
+\textbf{Q23. Why quantize? Which tensors?}   Fit + bandwidth; specify tensors, bitwidth, method, measured quality.
+
+
+\textbf{Q24. Speculative decoding?}   Draft proposes; target verifies; preserve target distribution; acceptance rate is the dial. (Leviathan 2023.)
+
+
+\textbf{Q25. Design a low-latency, high-throughput serving system.}   Prefill/decode $\rightarrow$ KV good/evil $\rightarrow$ GQA $\rightarrow$ FlashAttention $\rightarrow$ continuous batching + PagedAttention $\rightarrow$ quant $\rightarrow$ optional speculation $\rightarrow$ measure TTFT, TPOT, throughput, VRAM; state tradeoffs.
+
+
+\textbf{Q26. Domain chatbot tomorrow --- what first?}   Clarify grounded docs vs persona. Docs $\rightarrow$ RAG MVP. Style $\rightarrow$ FT/LoRA. Escalate with evidence.
+
+
+\textbf{Q27. OOM at long context with many chats?}   KV size $\rightarrow$ GQA? PagedAttention/fragmentation? max-token reservation? quant? batch vs latency SLO?
+
+
+\textbf{Q28. Accuracy fine, p95 latency bad?}   Prefill vs decode; TTFT vs TPOT; batching; KV bandwidth; speculation acceptance; FLOP vs bandwidth bound.
+
+
+\subsection{Quick-fire openers}
+
+
+\begin{table}[ht]
+\centering\small
+\begin{tabularx}{\textwidth}{@{}YY@{}}
+\toprule
+\textbf{If they ask\ldots{}} & \textbf{Open with\ldots{}} \\
+\midrule
+Entropy & Disorder/surprise $\rightarrow$ CE, temp, KL \\
+Transformer & Input / processor / output, then modules \\
+Attention & Tokens are islands $\rightarrow$ QKV $\rightarrow$ causal \\
+KV cache & Prefill/decode recompute waste \\
+GQA & MHA KV bandwidth $\rightarrow$ share KV in groups \\
+FlashAttention & HBM traffic, not new math \\
+PagedAttention & Contiguous KV fragmentation \\
+Quantization & Memory-bound decode + which tensors \\
+Speculative decoding & Serial target steps $\rightarrow$ draft--verify \\
+RAG vs FT & Grounded retrieve vs weight patterns \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+
+\subsection{Universal answer contract}
+
+\begin{enumerate}
+\item Do \textbf{not} start with the definition of X.  
+\item System context.  
+\item Naive approach + break.  
+\item Root design mistake.  
+\item X + mechanism.  
+\item Payoff + tradeoff.  
+\item One credible source.
+\end{enumerate}
+
+
+\bigskip
+
+
+\textit{Files: \texttt{research/llm\_concepts\_from\_scratch.md} (this) $\cdot$ \texttt{research/llm\_concepts\_from\_scratch.tex} (LaTeX twin)}
+
+
+\begin{thebibliography}{99}
+
+\bibitem{vaswani2017attention}
+Vaswani et~al. Attention is all you need. NeurIPS 2017.
+
+\bibitem{brown2020gpt3}
+Brown et~al. Language models are few-shot learners. NeurIPS 2020.
+
+\bibitem{kaplan2020scaling}
+Kaplan et~al. Scaling laws for neural language models. 2020.
+
+\bibitem{hoffmann2022chinchilla}
+Hoffmann et~al. Training compute-optimal large language models (Chinchilla). 2022.
+
+\bibitem{ouyang2022instructgpt}
+Ouyang et~al. Training language models to follow instructions with human feedback. NeurIPS 2022.
+\url{https://arxiv.org/abs/2203.02155}.
+
+\bibitem{rafailov2023dpo}
+Rafailov et~al. Direct Preference Optimization. NeurIPS 2023.
+
+\bibitem{lewis2020rag}
+Lewis et~al. Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks. NeurIPS 2020.
+
+\bibitem{wei2022cot}
+Wei et~al. Chain-of-Thought Prompting. NeurIPS 2022.
+
+\bibitem{wang2022selfcons}
+Wang et~al. Self-Consistency Improves Chain of Thought Reasoning. ICLR 2023.
+
+\bibitem{holtzman2019nucleus}
+Holtzman et~al. The Curious Case of Neural Text Degeneration. ICLR 2020.
+
+\bibitem{shazeer2019mqa}
+Noam Shazeer. Fast transformer decoding: One write-head is all you need. 2019.
+
+\bibitem{ainslie2023gqa}
+Ainslie et~al. GQA. EMNLP 2023.
+
+\bibitem{dao2022flash}
+Dao et~al. FlashAttention. NeurIPS 2022.
+
+\bibitem{dao2024flash3}
+Dao et~al. FlashAttention-3. NeurIPS 2024.
+
+\bibitem{kwon2023vllm}
+Kwon et~al. Efficient Memory Management for Large Language Model Serving with PagedAttention. SOSP 2023.
+
+\bibitem{vllmblog2023}
+Kwon \& Li. vLLM blog. \url{https://vllm.ai/blog/2023-06-20-vllm}.
+
+\bibitem{leviathan2023speculative}
+Leviathan et~al. Speculative decoding. ICML 2023.
+
+\bibitem{gu2023mamba}
+Gu \& Dao et~al. Mamba. 2023.
+
+\bibitem{deepseekmath2024}
+Shao et~al. DeepSeekMath. 2024.
+
+\bibitem{deepseekr12025}
+DeepSeek-AI. DeepSeek-R1. 2025.
+
+\bibitem{ong2025routellm}
+Ong et~al. RouteLLM. ICLR 2025.
+
+\bibitem{vizuara-site}
+Vizuara. Inference Engineering. \url{https://inference.vizuara.ai/}.
+
+\bibitem{vizuara-entropy-yt}
+Vizuara. Entropy Mental Model \#9. \url{https://www.youtube.com/watch?v=q3agYqgqklU}.
+
+\bibitem{vizuara-diffusion-yt}
+Vizuara. Diffusion Mental Model \#7. \url{https://www.youtube.com/watch?v=bTEfdB2D1Ek}.
+
+\bibitem{vizuara-expressivity-yt}
+Vizuara. Expressivity Mental Model \#6. \url{https://www.youtube.com/watch?v=YE0udJCgDqc}.
+
+\bibitem{vizuara-compression-yt}
+Vizuara. Compression Mental Model \#5. \url{https://www.youtube.com/watch?v=hGS6RbAYLl0}.
+
+\bibitem{vizuara-kv-yt}
+Vizuara. Interview \#1 KV Cache. \url{https://www.youtube.com/watch?v=CxRGWfcGVbs}.
+
+\bibitem{vizuara-transformer-yt}
+Vizuara. Interview \#3 Transformer. \url{https://www.youtube.com/watch?v=c533te7NSpI}.
+
+\bibitem{vizuara-attention-yt}
+Vizuara. Interview \#4 Attention. \url{https://www.youtube.com/watch?v=cquX2tOODUI}.
+
+\bibitem{vizuara-paged-yt}
+Vizuara. Interview \#5 PagedAttention. \url{https://www.youtube.com/watch?v=-AB6m0Spo6c}.
+
+\bibitem{vizuara-gqa-yt}
+Vizuara. Interview \#6 GQA. \url{https://www.youtube.com/watch?v=mtsY7JsGQjw}.
+
+\bibitem{vizuara-rag-ft-yt}
+Vizuara. Interview \#8 RAG vs Fine-Tuning. \url{https://www.youtube.com/watch?v=cCXjumE70-g}.
+
+\end{thebibliography}
+\end{document}

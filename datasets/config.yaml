@@ -32,6 +32,16 @@ model_pool:
     name: cross_family
     weak: qwen2.5-7b-instruct
     strong: llama-3.1-70b-instruct  # same strong; swap weak only
+  # Local hardware path when 70B does not fit (GB10 / unified memory).
+  # Main paper tables stay primary (8B↔70B); use this for S3-style local strong probes.
+  local_strong:
+    name: local_qwen32_strong
+    weak: llama-3.1-8b-instruct
+    strong: qwen2.5-32b-instruct
+  local_strong_gemma:
+    name: local_gemma27_strong
+    weak: llama-3.1-8b-instruct
+    strong: gemma-2-27b-it
 
 datasets:
   # Science MC — classic train/val/test → fit/calib/eval
@@ -46,7 +56,8 @@ datasets:
   hotpotqa:
     enabled: true
     hf_config: distractor
-    context_policy: question_only
+    # question_only | full_context (10 distractor paragraphs) | gold_only (supporting facts)
+    context_policy: full_context
     roles:
       fit:   { split: train, max_examples: 1000 }       # free-form signals
       calib: { split: train, max_examples: 200 }        # disjoint from fit (builder partitions)

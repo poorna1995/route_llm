@@ -1,0 +1,711 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+
+\newcommand{\layer}[1]{\paragraph{#1.}}
+\newcommand{\setup}{\layer{Setup}}
+\newcommand{\problem}{\layer{Problem}}
+\newcommand{\rootcause}{\layer{Root cause}}
+\newcommand{\solution}{\layer{Solution}}
+\newcommand{\payoff}{\layer{Payoff}}
+
+\title{Large Language Models End to End\\
+\large Explained the Interview Way:\\
+Basics $\rightarrow$ Problem $\rightarrow$ Root Cause $\rightarrow$ Solution}
+\author{Validated conceptual survey\\[0.5em]
+Style example:
+\href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{Vizuara --- LLM Interview Series \#5: What Is PagedAttention?}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document surveys the LLM lifecycle---pretraining, post-training, inference, and evaluation---using an interview-style narration:
+do not jump to definitions; first establish basics, then the failure of the naive approach, then the root design cause, and only then the method.
+The pedagogical pattern follows the public explanation style in
+\href{https://www.youtube.com/watch?v=-AB6m0Spo6c}{Vizuara's PagedAttention interview video},
+applied uniformly to every major concept.
+Technical claims are anchored to landmark papers and primary writeups; numeric speedups are not treated as universal laws.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+% =============================================================================
+\section{The Explanation Contract}
+\label{sec:contract}
+
+In the PagedAttention interview video, the narrator states explicitly that answering ``What is PagedAttention?'' by starting with the definition is the wrong move.
+A strong answer has layers~\cite{vizuara2026paged}:
+
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Basics / setup} --- what must the listener already understand?
+  \item \textbf{Problem} --- what breaks, with a concrete example?
+  \item \textbf{Root cause} --- which design choice creates the failure?
+  \item \textbf{Solution} --- only then name the method and walk the mechanism.
+  \item \textbf{Payoff} --- what improves in a real system, and what tradeoff appears?
+\end{enumerate}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lY@{}}
+\toprule
+\textbf{Layer} & \textbf{Question answered} \\
+\midrule
+Setup & What world are we in? \\
+Problem & What fails if we do the naive thing? \\
+Root cause & Which assumption creates that failure? \\
+Solution & What method addresses that root cause? \\
+Payoff & Why practitioners use it \\
+\bottomrule
+\end{tabularx}
+\caption{Narration contract used for every concept in this survey.}
+\label{tab:contract}
+\end{table}
+
+If you only remember the name of a method, you have not explained it.
+
+% =============================================================================
+\section{Foundations}
+\label{sec:foundations}
+
+\subsection{What is an LLM, really?}
+\label{sec:what-llm}
+
+\setup
+People say a chatbot ``understands language.''
+Under the hood, the deployed object is a parameterized function that maps a prefix of tokens to a distribution over the next token.
+
+\problem
+Language is open-ended. Hand-written rules (parsers + templates) do not scale to web text, code, dialogue, and instructions.
+
+\rootcause
+We need one objective that (i)~uses abundant unlabeled text and (ii)~produces a generative system.
+
+\solution
+\textbf{Autoregressive language modeling.}
+Model a sequence by the chain rule
+\begin{equation}
+P(x_1,\ldots,x_T)=\prod_{t=1}^{T} P(x_t \mid x_{<t}),
+\end{equation}
+and train by minimizing next-token cross-entropy.
+At inference, sample or take \(\arg\max\) tokens left to right~\cite{brown2020language}.
+
+\payoff
+One scalable objective can absorb many downstream behaviors as ``continue this prompt usefully.''
+
+\subsection{Why Transformers?}
+\label{sec:transformer}
+
+\setup
+We need an architecture that estimates \(P(x_t\mid x_{<t})\) for long contexts and trains efficiently on accelerators.
+
+\problem
+RNNs process tokens mostly sequentially; long-range dependencies and GPU parallelism are awkward at web scale.
+
+\rootcause
+The architecture must let every position gather information from other positions in parallel, with enough capacity to store patterns.
+
+\solution
+The \textbf{Transformer}~\cite{vaswani2017attention}: self-attention (Query/Key/Value) plus position-wise feed-forward networks.
+Decoder-only LLMs add \textbf{causal masking} so position \(t\) cannot attend to future tokens.
+
+\payoff
+Expressivity plus hardware fit made Transformers the default LLM backbone.
+
+\subsection{Tokenization}
+\label{sec:tok}
+
+\setup
+Neural nets consume integer token IDs, not raw Unicode strings.
+
+\problem
+Character-level sequences are too long (attention cost).
+Word-level vocabularies explode; rare words, typos, and code break.
+
+\rootcause
+We need an open vocabulary without pathological sequence length.
+
+\solution
+\textbf{Subword tokenization}, commonly Byte-Pair Encoding (BPE) / byte-level BPE in GPT-style models; other families use WordPiece or Unigram/SentencePiece.
+
+\payoff
+Any string is encodable; frequent words stay compact; rare pieces split.
+
+\subsection{Scaling laws}
+\label{sec:scaling}
+
+\setup
+Pretraining spend must choose model size and token count under a FLOP budget.
+
+\problem
+``Just make it bigger'' can waste compute if the model is undertrained (or over-wide relative to data).
+
+\rootcause
+Loss depends jointly on parameters, data, and compute---not on parameters alone.
+
+\solution
+Empirical scaling laws~\cite{kaplan2020scaling,hoffmann2022chinchilla}.
+Chinchilla emphasizes compute-optimal tokens-per-parameter allocations.
+
+\payoff
+Guides budgets.
+\textbf{Caution:} fits are empirical; data quality shifts constants; downstream skills need not scale smoothly.
+
+% =============================================================================
+\section{Pretraining}
+\label{sec:pretrain}
+
+\subsection{Pretraining data}
+\label{sec:data}
+
+\setup
+Pretraining is next-token prediction on massive corpora (web, books, code, \ldots).
+
+\problem
+Raw crawls contain spam, boilerplate, duplicates, and PII.
+Duplicates waste capacity and raise contamination risk.
+
+\rootcause
+Gradients follow the empirical data distribution.
+
+\solution
+Filter, deduplicate, and \textbf{mix domains}.
+Modern open recipes (e.g., Llama-family reports) describe these steps.
+Synthetic rewritten data appears carefully; overuse risks collapse.
+
+\payoff
+Higher effective quality per token; stronger code/math when those domains are present.
+
+\subsection{What pretraining does not guarantee}
+\label{sec:pretrain-limits}
+
+\setup
+After pretraining you have a \textbf{base model}.
+
+\problem
+Base models complete text; they need not follow instructions, refuse safely, or prefer helpful answers among many fluent ones.
+
+\rootcause
+The objective was ``predict the next token on internet-like text,'' not ``be a helpful assistant.''
+
+\solution
+Hand the baton to post-training (Section~\ref{sec:post}).
+Prompting cannot fully invent missing base competence; pretraining alone does not create chat alignment.
+
+\subsection{Architecture and systems knobs}
+\label{sec:arch-sys}
+
+Explain each the same way (setup $\to$ problem $\to$ root cause $\to$ solution).
+Compressed catalog:
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYY@{}}
+\toprule
+\textbf{Method} & \textbf{Problem targeted} & \textbf{Idea} \\
+\midrule
+RMSNorm / pre-norm & Deep-net instability & Normalize inside blocks \\
+SwiGLU & Need MLP quality per param & Gated FFN \\
+RoPE & Absolute PE weak for length & Rotary relative positions \\
+GQA / MQA & KV bandwidth at decode & Share KV heads \\
+MoE & Dense compute too expensive & Sparse experts per token \\
+AdamW + schedules & Stable large-batch training & Adaptive opt.\ + warmup/decay \\
+Mixed precision & Throughput / memory walls & BF16/FP16/FP8 matmuls \\
+DP / TP / PP / FSDP / ZeRO & Model+optimizer do not fit one GPU & Shard state and compute \\
+\bottomrule
+\end{tabularx}
+\caption{Pretraining architecture and systems methods (interview stubs).}
+\label{tab:pre-knobs}
+\end{table}
+
+% =============================================================================
+\section{Post-Training}
+\label{sec:post}
+
+\subsection{Supervised fine-tuning (SFT)}
+\label{sec:sft}
+
+\setup
+Users want answers to instructions, not random web continuations.
+
+\problem
+A base model may continue like a webpage, ignore the ask, or emit the wrong format.
+
+\rootcause
+Pretraining distribution \(\neq\) assistant distribution.
+
+\solution
+Fine-tune on \((\mathrm{prompt},\mathrm{desired\ response})\) demonstrations with ordinary likelihood.
+This is Step~1 of InstructGPT~\cite{ouyang2022instructgpt}.
+
+\payoff
+Teaches format and basic instruction following.
+Still insufficient when many answers are fluent but differently preferred.
+
+\subsection{Classic RLHF --- do not start with ``PPO''}
+\label{sec:rlhf}
+
+\setup
+After SFT, multiple fluent answers exist; humans still have preferences.
+
+\problem
+SFT clones demonstrations; it does not directly optimize ``prefer \(A\) over \(B\).''
+Writing one gold string per open-ended prompt is incomplete.
+
+\rootcause
+We need a ranking signal, then policy optimization that does not reward-hack into gibberish.
+
+\solution
+InstructGPT's three steps~\cite{ouyang2022instructgpt,openai2022instruct}:
+\begin{enumerate}[leftmargin=*]
+  \item SFT on demonstrations;
+  \item train a \textbf{reward model} on human comparisons of model outputs;
+  \item optimize the policy with \textbf{PPO} to raise RM reward, with a \textbf{KL penalty} to a reference policy.
+\end{enumerate}
+
+\payoff
+First widely deployed instruction-aligned GPT-style assistants.
+Costs: preference data, RM misspecification, reward hacking, multi-model complexity.
+
+\subsection{RLAIF / Constitutional AI}
+\label{sec:rlaif}
+
+\setup
+Human labels do not scale forever.
+
+\problem
+Safety/helpfulness coverage is expensive and thin on edges.
+
+\rootcause
+Human feedback is the bottleneck.
+
+\solution
+AI feedback (RLAIF) and principle-guided critique/revision (Constitutional AI)~\cite{bai2022constitutional}.
+
+\payoff
+Scales labeling; inherits teacher-model biases.
+
+\subsection{DPO --- problem first}
+\label{sec:dpo}
+
+\setup
+Full RLHF needs sampling, an RM, PPO, a value model, and KL control.
+
+\problem
+That stack is costly and operationally brittle for many labs.
+
+\rootcause
+If preferences already define a Bradley--Terry ranking, the KL-constrained optimal policy can be expressed so an explicit RM+PPO loop is not mandatory.
+
+\solution
+\textbf{Direct Preference Optimization (DPO)}~\cite{rafailov2023dpo}: train the policy on preference pairs with an objective that implicitly encodes the reward.
+Related methods (IPO, KTO, ORPO, SimPO, \ldots) should be introduced only after naming which RLHF pain point they target.
+
+\payoff
+Simpler alignment; still depends on preference quality.
+
+\subsection{Reasoning post-training}
+\label{sec:reasoning}
+
+\setup
+Chat alignment \(\neq\) contest math/coding reliability.
+
+\problem
+Outcome-only rewards are sparse; soft learned rewards can be hacked; PPO critics are heavy.
+
+\rootcause
+Credit assignment and reward design for long traces are hard.
+
+\solution
+\begin{itemize}[leftmargin=*]
+  \item ORM: score final answers when verifiers exist;
+  \item PRM: score intermediate steps (process supervision);
+  \item RL with verifiable rewards (tests/checkers);
+  \item \textbf{GRPO}~\cite{shao2024deepseekmath}: group of samples per prompt; group-normalized advantages; no value network;
+  \item DeepSeek-R1 multi-stage recipe~\cite{deepseekr12025}: R1-Zero uses rule-based RL; full R1 adds cold-start SFT and further stages for readability/helpfulness.
+\end{itemize}
+
+\payoff
+Can raise reasoning benchmarks when rewards are grounded.
+Do not invent exact leaderboard numbers; copy from a specific paper revision.
+
+\subsection{Parameter-efficient fine-tuning}
+\label{sec:peft}
+
+\setup
+Full fine-tunes are memory-heavy; many tasks may need adapters.
+
+\problem
+A full weight copy per task is impractical.
+
+\rootcause
+Task updates are often low-dimensional relative to \(W\).
+
+\solution
+LoRA, QLoRA, adapters, prefix/prompt tuning, model merging.
+
+\payoff
+Fine-tune on smaller GPUs; serve multiple adapters.
+
+% =============================================================================
+\section{Inference}
+\label{sec:inference}
+
+\subsection{Prefill vs decode}
+\label{sec:prefill-decode}
+
+\setup
+A user sends a prompt; the system returns tokens.
+
+\problem
+Calling everything ``inference'' hides the structure serving engineers use~\cite{vizuara2026paged}:
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Prefill:} process prompt tokens (largely parallel) and emit the first output token;
+  \item \textbf{Decode:} emit one new token at a time.
+\end{enumerate}
+
+\rootcause
+Autoregressive factorization forces sequential decode even when prefill is parallel.
+
+\payoff
+KV cache, continuous batching, and PagedAttention are all explained relative to this split.
+
+\subsection{KV cache}
+\label{sec:kv}
+
+\setup
+Each decode step needs keys/values for all previous tokens.
+
+\problem
+Recomputing \(K/V\) for the entire prefix every step repeats matmuls; latency grows badly with length.
+
+\rootcause
+Past tokens' \(K/V\) do not change; only the new token adds new \(K/V\).
+
+\solution
+\textbf{KV cache:} store past keys/values; append each new token's \(K/V\).
+
+\payoff
+Less compute, more memory---and KV memory becomes the serving bottleneck that motivates PagedAttention.
+
+\subsection{PagedAttention (full interview-style walkthrough)}
+\label{sec:paged}
+
+This subsection follows the layered answer structure taught in~\cite{vizuara2026paged}, with mechanisms validated against the vLLM writeup and paper~\cite{kwon2023vllm,vllmblog2023}.
+
+\subsubsection*{Layer 1 --- Basics: GPU memory during inference}
+GPU memory during inference holds roughly:
+(1)~model weights,
+(2)~activations,
+(3)~the KV cache, which grows with generated tokens and often dominates serving.
+
+\subsubsection*{Layer 2 --- Problem: contiguous KV reservation wastes memory}
+The KV cache is large and \emph{dynamic} (length unknown ahead of time).
+The vLLM authors report that existing systems can waste a large fraction of KV memory via fragmentation and over-reservation (characterized as about 60\%--80\% waste in the regimes discussed in their blog)~\cite{vllmblog2023}.
+
+Teaching example with multiple users~\cite{vizuara2026paged}:
+reserve a contiguous slab per request up to a projected \(\texttt{max\_tokens}\).
+Then:
+\begin{itemize}[leftmargin=*]
+  \item reserved space sits unused while a request is still decoding, blocking other users;
+  \item when a short request finishes early, free holes may be too small or wrongly placed for a waiting longer request.
+\end{itemize}
+Effective batch size collapses; throughput falls.
+
+\subsubsection*{Layer 3 --- Root cause}
+KV for a request is allocated as contiguous physical memory, despite highly variable lengths---analogous to forcing contiguous physical RAM for an entire process address space.
+
+\subsubsection*{Layer 4 --- Solution: PagedAttention in vLLM}
+Inspired by OS virtual memory and paging~\cite{kwon2023vllm,vllmblog2023}:
+\begin{enumerate}[leftmargin=*]
+  \item Partition KV memory into fixed-size \textbf{blocks} (pages). Block size is a system parameter; discussions of vLLM often use 16 tokens/block as a default example.
+  \item Each block stores \(K/V\) for that many tokens.
+  \item Maintain a \textbf{free block list} and a per-request \textbf{block table} mapping logical spans to physical blocks.
+  \item Allocate blocks on demand during decode; a request's blocks need not be contiguous.
+  \item The attention kernel gathers \(K/V\) by following the block table (\textbf{PagedAttention}).
+\end{enumerate}
+The same abstraction enables sharing blocks across sequences (e.g., parallel samples from one prompt) via reference counting / copy-on-write~\cite{vllmblog2023}.
+
+\subsubsection*{Layer 5 --- Payoff}
+Waste is largely limited to the last partial block (blog characterization: under \(\sim\)4\% in their analysis)~\cite{vllmblog2023}, enabling larger batches and higher throughput.
+Reported speedups are workload-dependent; do not universalize a single multiplier.
+
+\subsection{Decoding, systems, and behavioral inference methods}
+\label{sec:decode-behave}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lYY@{}}
+\toprule
+\textbf{Method} & \textbf{Problem} & \textbf{Root idea} \\
+\midrule
+Temperature / top-\(k\) / top-\(p\)~\cite{holtzman2019curious} & Greedy dullness vs long-tail nonsense & Decision policy on \(P(x_t\mid x_{<t})\) \\
+Continuous batching & Static batches idle as sequences finish unevenly & Dynamically admit/finish requests \\
+Speculative decoding~\cite{leviathan2023speculative} & Large-model serial decode latency & Draft proposes; large verifies \\
+Quantization & VRAM / bandwidth walls & Lower-bit weights/KV \\
+Cascade / routing~\cite{ong2025routellm,ding2024hybrid} & Always-large is too costly & Easy queries $\to$ smaller models \\
+CoT~\cite{wei2022cot} / self-consistency~\cite{wang2022selfconsistency} & Multi-step one-shot failures & Extra reasoning tokens / vote \\
+RAG~\cite{lewis2020rag} / tools & Stale parametric memory; weak exact ops & Retrieve or call external systems \\
+Test-time compute & Residual hard-tail errors & Spend more FLOPs at serve time \\
+\bottomrule
+\end{tabularx}
+\caption{Inference methods, each still explained via problem-first narration.}
+\label{tab:infer-methods}
+\end{table}
+
+% =============================================================================
+\section{Evaluation}
+\label{sec:eval}
+
+\subsection{Why evaluation is its own stage}
+\label{sec:eval-why}
+
+\setup
+You changed data, loss, or decoding; a dashboard number moved.
+
+\problem
+A leaderboard can rise while users get worse or less safe answers.
+
+\rootcause
+Benchmarks operationalize \emph{narrow} skills; proxies can be gamed; contamination inflates scores; LLM-as-judge has biases~\cite{zheng2023judging}.
+
+\solution
+Portfolio evaluation: capability suites (e.g., MMLU~\cite{hendrycks2021mmlu}, GSM8K~\cite{cobbe2021gsm8k}, HumanEval~\cite{chen2021humaneval}), instruction rubrics, human preference (Arena Elo), safety, plus cost/latency.
+Report threats: contamination, prompt sensitivity, judge bias, shift.
+
+\payoff
+Know whether the change was real.
+
+\subsection{Routing metrics}
+\label{sec:routing-eval}
+
+\setup
+Choose weak/cheap vs strong/expensive per query~\cite{ong2025routellm,ding2024hybrid}.
+
+\problem
+Accuracy alone hides the point of routing.
+
+\rootcause
+The objective is Pareto: quality vs cost.
+
+\solution
+\begin{equation}
+\mathrm{PGR}(R)=\frac{r(R)-r(M_{\mathrm{weak}})}{r(M_{\mathrm{strong}})-r(M_{\mathrm{weak}})},
+\end{equation}
+plus cost \(c(R)\) and CPT(\(x\%\)) (minimum strong-call fraction to hit target PGR).
+
+% =============================================================================
+\section{End-to-End Causal Chain}
+\label{sec:chain}
+
+\begin{lstlisting}[basicstyle=\ttfamily\small,frame=single]
+Text in the world
+  -> filter/dedup/mix + tokenize
+  -> pretrain next-token LM
+  -> base model
+  -> SFT
+  -> preferences (RLHF or DPO/...) / reasoning RL
+  -> aligned / reasoning model
+  -> serve: prefill/decode, KV, batching, PagedAttention, sampling
+  -> optionally: RAG, tools, test-time compute, routing
+  -> evaluate capability + preference + safety + cost
+  -> iterate
+\end{lstlisting}
+
+\begin{table}[ht]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{}lY@{}}
+\toprule
+\textbf{Symptom} & \textbf{Likely stage} \\
+\midrule
+Cannot do basics even with good prompts & Pretraining data/capacity \\
+Knows facts, ignores instructions & SFT \\
+Fluent but rude/unsafe/sycophantic & Preference / safety post-training \\
+Chat OK, hard math fails & Reasoning post-training or test-time compute \\
+Correct but too slow/expensive & Inference systems / routing \\
+Leaderboard up, users unhappy & Evaluation mismatch \\
+\bottomrule
+\end{tabularx}
+\caption{Symptom to lifecycle stage.}
+\label{tab:symptoms}
+\end{table}
+
+% =============================================================================
+\section{Interview Cheat Sheet}
+\label{sec:cheat}
+
+When asked ``What is \(X\)?'':
+\begin{enumerate}[leftmargin=*]
+  \item Do \textbf{not} start with the definition of \(X\).
+  \item Explain system context (training or serving).
+  \item Show the naive approach and where it breaks.
+  \item Name the root design mistake.
+  \item Introduce \(X\) and walk the mechanism.
+  \item State the payoff and the new tradeoff.
+  \item Cite one credible source.
+\end{enumerate}
+That is the PagedAttention-video pattern~\cite{vizuara2026paged}, applied to every concept above.
+
+% =============================================================================
+\section{Explicit Non-Claims}
+\label{sec:nonclaims}
+
+\begin{itemize}[leftmargin=*]
+  \item No universal ``best'' alignment algorithm.
+  \item No fabricated benchmarks or universalized speedups.
+  \item Preference alignment does not ``solve'' safety.
+  \item Agents add orchestration/tools/memory \emph{on top of} this stack.
+\end{itemize}
+
+% =============================================================================
+\begin{thebibliography}{99}
+
+\bibitem{vizuara2026paged}
+Vizuara.
+\newblock LLM Interview Series \#5: What Is PagedAttention?
+\newblock YouTube, \url{https://www.youtube.com/watch?v=-AB6m0Spo6c}, 2026.
+\newblock Used here as a \emph{narration-style} reference, not as a primary technical source.
+
+\bibitem{vaswani2017attention}
+Ashish Vaswani et~al.
+\newblock Attention is all you need.
+\newblock In \emph{NeurIPS}, 2017.
+
+\bibitem{brown2020language}
+Tom~B. Brown et~al.
+\newblock Language models are few-shot learners.
+\newblock In \emph{NeurIPS}, 2020.
+
+\bibitem{kaplan2020scaling}
+Jared Kaplan et~al.
+\newblock Scaling laws for neural language models.
+\newblock arXiv:2001.08361, 2020.
+
+\bibitem{hoffmann2022chinchilla}
+Jordan Hoffmann et~al.
+\newblock Training compute-optimal large language models.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem{ouyang2022instructgpt}
+Long Ouyang et~al.
+\newblock Training language models to follow instructions with human feedback.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem{openai2022instruct}
+OpenAI.
+\newblock Aligning language models to follow instructions.
+\newblock \url{https://openai.com/index/instruction-following/}, 2022.
+
+\bibitem{bai2022constitutional}
+Yuntao Bai et~al.
+\newblock Constitutional AI: Harmlessness from AI feedback.
+\newblock arXiv:2212.08073, 2022.
+
+\bibitem{rafailov2023dpo}
+Rafael Rafailov et~al.
+\newblock Direct preference optimization: Your language model is secretly a reward model.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{shao2024deepseekmath}
+Zhihong Shao et~al.
+\newblock DeepSeekMath: Pushing the limits of mathematical reasoning in open language models.
+\newblock arXiv:2402.03300, 2024.
+
+\bibitem{deepseekr12025}
+DeepSeek-AI.
+\newblock DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning.
+\newblock 2025.
+
+\bibitem{kwon2023vllm}
+Woosuk Kwon et~al.
+\newblock Efficient memory management for large language model serving with PagedAttention.
+\newblock In \emph{SOSP}, 2023.
+
+\bibitem{vllmblog2023}
+Woosuk Kwon and Zhuohan Li.
+\newblock vLLM: Easy, fast, and cheap LLM serving with PagedAttention.
+\newblock \url{https://vllm.ai/blog/2023-06-20-vllm}, 2023.
+
+\bibitem{holtzman2019curious}
+Ari Holtzman et~al.
+\newblock The curious case of neural text degeneration.
+\newblock In \emph{ICLR}, 2020.
+
+\bibitem{leviathan2023speculative}
+Yaniv Leviathan, Matan Kalman, and Yossi Matias.
+\newblock Fast inference from transformers via speculative decoding.
+\newblock In \emph{ICML}, 2023.
+
+\bibitem{lewis2020rag}
+Patrick Lewis et~al.
+\newblock Retrieval-augmented generation for knowledge-intensive NLP tasks.
+\newblock In \emph{NeurIPS}, 2020.
+
+\bibitem{wei2022cot}
+Jason Wei et~al.
+\newblock Chain-of-thought prompting elicits reasoning in large language models.
+\newblock In \emph{NeurIPS}, 2022.
+
+\bibitem{wang2022selfconsistency}
+Xuezhi Wang et~al.
+\newblock Self-consistency improves chain of thought reasoning in language models.
+\newblock In \emph{ICLR}, 2023.
+
+\bibitem{hendrycks2021mmlu}
+Dan Hendrycks et~al.
+\newblock Measuring massive multitask language understanding.
+\newblock In \emph{ICLR}, 2021.
+
+\bibitem{cobbe2021gsm8k}
+Karl Cobbe et~al.
+\newblock Training verifiers to solve math word problems.
+\newblock arXiv:2110.14168, 2021.
+
+\bibitem{chen2021humaneval}
+Mark Chen et~al.
+\newblock Evaluating large language models trained on code.
+\newblock arXiv:2107.03374, 2021.
+
+\bibitem{zheng2023judging}
+Lianmin Zheng et~al.
+\newblock Judging LLM-as-a-judge with MT-Bench and Chatbot Arena.
+\newblock In \emph{NeurIPS}, 2023.
+
+\bibitem{ong2025routellm}
+Isaac Ong et~al.
+\newblock RouteLLM: Learning to route LLMs with preference data.
+\newblock In \emph{ICLR}, 2025.
+
+\bibitem{ding2024hybrid}
+Dujian Ding et~al.
+\newblock Hybrid LLM: Cost-efficient and quality-aware query routing.
+\newblock arXiv:2404.14618, 2024.
+
+\end{thebibliography}
+
+\end{document}
